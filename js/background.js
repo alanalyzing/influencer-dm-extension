@@ -284,7 +284,7 @@ async function runDMLoop() {
         state.currentIndex++;
         if (state.status === 'sending' && state.currentIndex < state.selectedUsers.length) {
           broadcastDMProgress('', 'waiting', `Waiting ${state.delaySeconds}s before next user...`);
-          await delay(state.delaySeconds * 1000);
+          await delay(state.delaySeconds * 1000, true);
         }
         continue;
       } else if (clickResult && clickResult.error) {
@@ -343,10 +343,10 @@ async function runDMLoop() {
 
     state.currentIndex++;
 
-    // Wait delay before next user (unless paused or done)
+    // Wait delay before next user — breaks early if paused
     if (state.status === 'sending' && state.currentIndex < state.selectedUsers.length) {
       broadcastDMProgress('', 'waiting', `Waiting ${state.delaySeconds}s before next DM...`);
-      await delay(state.delaySeconds * 1000);
+      await delay(state.delaySeconds * 1000, true);
     }
   }
 
@@ -454,8 +454,21 @@ function broadcastDMProgress(username, substep, detail) {
   }).catch(() => {});
 }
 
-function delay(ms) {
-  return new Promise(r => setTimeout(r, ms));
+/** Cancellable delay — resolves early if state becomes paused */
+function delay(ms, checkPause = false) {
+  if (!checkPause) return new Promise(r => setTimeout(r, ms));
+  // Break the wait into 500ms chunks so we can check for pause
+  return new Promise(async (resolve) => {
+    const chunks = Math.ceil(ms / 500);
+    for (let i = 0; i < chunks; i++) {
+      await new Promise(r => setTimeout(r, Math.min(500, ms - i * 500)));
+      if (state.status !== 'sending') {
+        resolve();
+        return;
+      }
+    }
+    resolve();
+  });
 }
 
 async function saveDMHistory(entry) {

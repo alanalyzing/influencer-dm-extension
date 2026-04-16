@@ -629,7 +629,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (config.keywords) keywordsInput.value = config.keywords.join(', ');
         if (config.dmTemplate) dmTemplateInput.value = config.dmTemplate;
         if (config.delaySeconds) delayInput.value = config.delaySeconds;
-        if (config.autoSend) autoSendToggle.checked = config.autoSend;
+        autoSendToggle.checked = false; // Always default to unchecked
       }
     } catch (e) {}
   }
