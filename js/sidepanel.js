@@ -44,6 +44,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const dmActiveActions  = $('dmActiveActions');
   const dmDoneActions    = $('dmDoneActions');
   const btnPauseDMs      = $('btnPauseDMs');
+  const btnBackToConfigDM = $('btnBackToConfigFromDM');
   const btnNewCampaign   = $('btnNewCampaign');
 
   // Pending Follows (Plan B)
@@ -460,8 +461,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else if (s.status === 'paused') {
           dmStatusText.textContent = `Paused — ${s.sentLog?.length || 0} / ${selectedUsers.length} processed`;
           btnPauseDMs.textContent = 'Resume';
+          btnBackToConfigDM.style.display = 'inline-flex';
         } else {
           btnPauseDMs.textContent = 'Pause';
+          btnBackToConfigDM.style.display = 'none';
         }
       } catch (e) { /* ignore */ }
     }, 2000);
@@ -485,10 +488,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (s.status === 'paused') {
       await bg({ action: 'resumeDMs' });
       btnPauseDMs.textContent = 'Pause';
+      btnBackToConfigDM.style.display = 'none';
     } else {
       await bg({ action: 'pauseDMs' });
       btnPauseDMs.textContent = 'Resume';
+      btnBackToConfigDM.style.display = 'inline-flex';
     }
+  });
+
+  btnBackToConfigDM.addEventListener('click', async () => {
+    clearInterval(pollTimer);
+    await bg({ action: 'reset' });
+    await refreshPendingFollows();
+    btnBackToConfigDM.style.display = 'none';
+    goToStep(1);
   });
 
   btnNewCampaign.addEventListener('click', async () => {
