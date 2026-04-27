@@ -1,16 +1,21 @@
 /**
- * Background Service Worker (v4)
+ * Background Service Worker (v5)
  *
  * THE ORCHESTRATOR — drives all navigation and content-script injection.
  *
  * Two modes:
- *   1. Keyword Scan — scan post comments, send DMs
- *   2. Bulk Outreach — handle list, follow/DM, waitlist
+ *   1. Bulk Outreach (primary) — handle list, follow/DM, waitlist, cadence
+ *   2. Keyword Scan — scan post comments, send DMs
+ *
+ * v5 additions:
+ *   - Three-light history: viewed / followed / messaged per user
+ *   - Cadence queue: scheduled follow-up DMs at 6h, 12h, 24h
+ *   - getCadenceQueue / processCadenceQueue handlers
  */
 
 // ─── State: Keyword Scan ───
 let state = {
-  status: 'idle',  // idle | scanning | reviewing | sending | paused | done
+  status: 'idle',
   postUrl: '',
   keywords: [],
   dmTemplate: '',
@@ -27,19 +32,26 @@ let state = {
 
 // ─── State: Bulk Outreach ───
 let boState = {
-  status: 'idle',  // idle | sending | paused | done
-  outreachList: [],  // { username, templateId, templateName, dmTemplate }
+  status: 'idle',
+  outreachList: [],
   delaySeconds: 30,
-  sentLog: [],       // { username, status, message, timestamp }
+  sentLog: [],
   currentIndex: 0,
-  tabId: null
+  tabId: null,
+  cadenceConfig: null  // { intervals: [6,12,24], followUpTemplateId: '' }
 };
+
+// ─── Cadence timer ───
+let cadenceTimerId = null;
 
 // ─── Open side panel when extension icon is clicked ───
 chrome.action.onClicked.addListener((tab) => {
   chrome.sidePanel.open({ tabId: tab.id });
 });
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+
+// ─── Start cadence processor on startup ───
+startCadenceProcessor();
 
 // ─── Message Router ───
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -125,7 +137,6 @@ const handlers = {
   clearHistory: async () => { await chrome.storage.local.set({ dmHistory: [] }); return { success: true }; },
   getLastConfig: async () => { const data = await chrome.storage.local.get('lastConfig'); return { config: data.lastConfig || null }; },
 
-  // Pending Follows (Keyword Scan Plan B)
   getPendingFollows: async () => { const data = await chrome.storage.local.get('pendingFollows'); return { pendingFollows: data.pendingFollows || [] }; },
   clearPendingFollows: async () => { await chrome.storage.local.set({ pendingFollows: [] }); return { success: true }; },
 
@@ -138,6 +149,7 @@ const handlers = {
   startBulkOutreach: async (msg) => {
     boState.outreachList = msg.outreachList;
     boState.delaySeconds = msg.delaySeconds || 30;
+    boState.cadenceConfig = msg.cadenceConfig || null;
     boState.status = 'sending';
     boState.currentIndex = 0;
     boState.sentLog = [];
@@ -150,7 +162,7 @@ const handlers = {
 
   resetBO: () => {
     boState.status = 'idle'; boState.outreachList = []; boState.sentLog = [];
-    boState.currentIndex = 0;
+    boState.currentIndex = 0; boState.cadenceConfig = null;
     return { success: true };
   },
 
@@ -174,6 +186,20 @@ const handlers = {
     if (!waitlist.length) return { success: false, error: 'Waitlist empty' };
     runWaitlistRecheck(waitlist);
     return { success: true };
+  },
+
+  // ═══════════════════════════════════════════
+  //  CADENCE QUEUE
+  // ═══════════════════════════════════════════
+
+  getCadenceQueue: async () => {
+    const data = await chrome.storage.local.get('cadenceQueue');
+    return { cadenceQueue: data.cadenceQueue || [] };
+  },
+
+  clearCadenceQueue: async () => {
+    await chrome.storage.local.set({ cadenceQueue: [] });
+    return { success: true };
   }
 };
 
@@ -189,14 +215,12 @@ async function runDMLoop() {
     state.currentDMUser = user.username;
 
     try {
-      // Step 1: Navigate to profile
       state.currentDMStep = 'navigating';
       broadcastDMProgress(user.username, 'navigating', `Opening @${user.username}'s profile...`);
       await chrome.tabs.update(state.tabId, { url: `https://www.instagram.com/${user.username}/` });
       await waitForTabLoad(state.tabId);
       await delay(3000);
 
-      // Step 2: Click Message button
       state.currentDMStep = 'clickingMessage';
       broadcastDMProgress(user.username, 'clickingMessage', 'Finding and clicking "Message" button...');
       await injectContentScript(state.tabId);
@@ -204,7 +228,6 @@ async function runDMLoop() {
       const clickResult = await sendToTab(state.tabId, { action: 'clickMessageButton' });
 
       if (clickResult && clickResult.error && clickResult.noMessage) {
-        // Plan B: Follow
         state.currentDMStep = 'following';
         broadcastDMProgress(user.username, 'following', 'No Message button — following user instead...');
         await delay(500);
@@ -215,7 +238,7 @@ async function runDMLoop() {
         state.currentDMStep = 'followed';
         const statusMsg = alreadyFollowing ? `Already following @${user.username} — saved to retry queue` : `Followed @${user.username} (${followStatus}) — saved to retry queue`;
         broadcastDMProgress(user.username, 'followed', statusMsg);
-        const logEntry = { username: user.username, status: 'followed', message: statusMsg, timestamp: new Date().toISOString() };
+        const logEntry = { username: user.username, status: 'followed', message: statusMsg, timestamp: Date.now(), viewed: true, followed: true };
         state.sentLog.push(logEntry);
         await saveDMHistory(logEntry);
         state.currentIndex++;
@@ -228,30 +251,27 @@ async function runDMLoop() {
         throw new Error(clickResult.error);
       }
 
-      // Step 3: Wait for DM
       state.currentDMStep = 'waitingDM';
       broadcastDMProgress(user.username, 'waitingDM', 'Waiting for DM conversation to open...');
       await delay(3000);
       await injectContentScript(state.tabId);
       await delay(1000);
 
-      // Step 4: Type & send
       state.currentDMStep = 'typing';
       broadcastDMProgress(user.username, 'typing', 'Typing message...');
       const typeResult = await sendToTab(state.tabId, { action: 'typeAndSendDM', message: personalizedMsg });
       if (typeResult && typeResult.error) throw new Error(typeResult.error);
 
-      // Step 5: Done
       state.currentDMStep = 'done';
       broadcastDMProgress(user.username, 'done', 'DM sent successfully!');
-      const logEntry = { username: user.username, status: 'success', message: 'DM sent successfully', timestamp: new Date().toISOString() };
-      state.sentLog.push(logEntry);
+      const logEntry = { username: user.username, status: 'messaged', message: 'DM sent successfully', timestamp: Date.now(), viewed: true, followed: false };
+      state.sentLog.push({ ...logEntry, status: 'success' });
       await saveDMHistory(logEntry);
 
     } catch (err) {
       state.currentDMStep = 'error';
       broadcastDMProgress(user.username, 'error', `Error: ${err.message}`);
-      const logEntry = { username: user.username, status: 'error', message: err.message, timestamp: new Date().toISOString() };
+      const logEntry = { username: user.username, status: 'error', message: err.message, timestamp: Date.now(), viewed: true, followed: false };
       state.sentLog.push(logEntry);
       await saveDMHistory(logEntry);
     }
@@ -279,7 +299,6 @@ async function runDMLoop() {
 // ════════════════════════════════════════════════════════════
 
 async function runBulkOutreachLoop() {
-  // Get or create a tab
   if (!boState.tabId) {
     const tab = await getOrCreateIGTab('https://www.instagram.com/');
     boState.tabId = tab.id;
@@ -311,19 +330,32 @@ async function runBulkOutreachLoop() {
         const clickResult = await sendToTab(boState.tabId, { action: 'clickMessageButton' });
         if (clickResult && clickResult.error) throw new Error(clickResult.error);
 
-        // Wait for DM to open
         await delay(3000);
         await injectContentScript(boState.tabId);
         await delay(1000);
 
-        // Type and send
         broadcastBOProgress(user.username, 'typing', 'Typing message...');
         const typeResult = await sendToTab(boState.tabId, { action: 'typeAndSendDM', message: personalizedMsg });
         if (typeResult && typeResult.error) throw new Error(typeResult.error);
 
         broadcastBOProgress(user.username, 'done', 'DM sent!');
-        boState.sentLog.push({ username: user.username, status: 'success', message: 'DM sent', timestamp: new Date().toISOString() });
-        await saveDMHistory({ username: user.username, status: 'success', message: `DM sent (${user.templateName})`, timestamp: new Date().toISOString() });
+        boState.sentLog.push({ username: user.username, status: 'success', message: 'DM sent', timestamp: Date.now() });
+
+        // Save to history with three-light status
+        await saveDMHistory({
+          username: user.username,
+          status: 'messaged',
+          message: `DM sent (${user.templateName})`,
+          templateName: user.templateName,
+          timestamp: Date.now(),
+          viewed: true,
+          followed: false
+        });
+
+        // Schedule cadence follow-ups if configured
+        if (boState.cadenceConfig && boState.cadenceConfig.intervals && boState.cadenceConfig.intervals.length > 0) {
+          await scheduleCadenceFollowUps(user, boState.cadenceConfig);
+        }
 
       } else {
         // ── Follow path → Waitlist ──
@@ -333,7 +365,6 @@ async function runBulkOutreachLoop() {
         const followStatus = followResult?.status || 'unknown';
         const alreadyFollowing = followResult?.alreadyFollowing || false;
 
-        // Add to waitlist
         await saveToWaitlist({
           username: user.username,
           templateId: user.templateId,
@@ -348,12 +379,33 @@ async function runBulkOutreachLoop() {
           ? `Already following @${user.username} — added to waitlist`
           : `Followed @${user.username} — added to waitlist`;
         broadcastBOProgress(user.username, 'waitlisted', statusMsg);
-        boState.sentLog.push({ username: user.username, status: 'waitlisted', message: statusMsg, timestamp: new Date().toISOString() });
+        boState.sentLog.push({ username: user.username, status: 'waitlisted', message: statusMsg, timestamp: Date.now() });
+
+        // Save to history with three-light status
+        await saveDMHistory({
+          username: user.username,
+          status: 'followed',
+          message: statusMsg,
+          templateName: user.templateName,
+          timestamp: Date.now(),
+          viewed: true,
+          followed: true
+        });
       }
 
     } catch (err) {
       broadcastBOProgress(user.username, 'error', `Error: ${err.message}`);
-      boState.sentLog.push({ username: user.username, status: 'error', message: err.message, timestamp: new Date().toISOString() });
+      boState.sentLog.push({ username: user.username, status: 'error', message: err.message, timestamp: Date.now() });
+
+      await saveDMHistory({
+        username: user.username,
+        status: 'error',
+        message: err.message,
+        templateName: user.templateName,
+        timestamp: Date.now(),
+        viewed: true,
+        followed: false
+      });
     }
 
     boState.currentIndex++;
@@ -372,6 +424,128 @@ async function runBulkOutreachLoop() {
     if (waitlisted > 0) summary += ` ${waitlisted} added to waitlist.`;
     broadcastProgress({ step: 'boDone', detail: summary, type: 'success' });
   }
+}
+
+
+// ════════════════════════════════════════════════════════════
+//  CADENCE FOLLOW-UP SCHEDULING
+// ════════════════════════════════════════════════════════════
+
+async function scheduleCadenceFollowUps(user, cadenceConfig) {
+  const data = await chrome.storage.local.get('cadenceQueue');
+  const queue = data.cadenceQueue || [];
+  const now = Date.now();
+
+  // Get the follow-up template
+  let followUpTemplate = user.dmTemplate;
+  if (cadenceConfig.followUpTemplateId) {
+    const tplData = await chrome.storage.local.get('boTemplates');
+    const tpls = tplData.boTemplates || [];
+    const tpl = tpls.find(t => t.id === cadenceConfig.followUpTemplateId);
+    if (tpl) followUpTemplate = tpl.body;
+  }
+
+  for (const hours of cadenceConfig.intervals) {
+    const sendAt = now + (hours * 3600000);
+    // Don't add duplicate cadence entries
+    const exists = queue.some(q => q.username === user.username && q.cadenceHours === hours);
+    if (!exists) {
+      queue.push({
+        username: user.username,
+        templateId: cadenceConfig.followUpTemplateId || user.templateId,
+        templateName: user.templateName,
+        dmTemplate: followUpTemplate,
+        cadenceHours: hours,
+        sendAt,
+        status: 'pending',
+        createdAt: now
+      });
+    }
+  }
+
+  await chrome.storage.local.set({ cadenceQueue: queue });
+  broadcastCadenceUpdate();
+}
+
+function startCadenceProcessor() {
+  // Check every 2 minutes for due cadence items
+  if (cadenceTimerId) clearInterval(cadenceTimerId);
+  cadenceTimerId = setInterval(processCadenceQueue, 120000);
+  // Also run once on startup after a short delay
+  setTimeout(processCadenceQueue, 10000);
+}
+
+async function processCadenceQueue() {
+  const data = await chrome.storage.local.get('cadenceQueue');
+  const queue = data.cadenceQueue || [];
+  const now = Date.now();
+
+  const due = queue.filter(item => item.status === 'pending' && item.sendAt <= now);
+  if (!due.length) return;
+
+  // Don't process if another operation is running
+  if (boState.status === 'sending' || state.status === 'sending') return;
+
+  let tab;
+  try {
+    tab = await getOrCreateIGTab('https://www.instagram.com/');
+    await waitForTabLoad(tab.id);
+    await delay(2000);
+  } catch (e) { return; }
+
+  for (const item of due) {
+    const personalizedMsg = (item.dmTemplate || '').replace(/\{\{username\}\}/gi, item.username);
+
+    try {
+      await chrome.tabs.update(tab.id, { url: `https://www.instagram.com/${item.username}/` });
+      await waitForTabLoad(tab.id);
+      await delay(3000);
+      await injectContentScript(tab.id);
+      await delay(500);
+
+      const profileCheck = await sendToTab(tab.id, { action: 'checkProfileActions' });
+
+      if (profileCheck && profileCheck.hasMessage) {
+        const clickResult = await sendToTab(tab.id, { action: 'clickMessageButton' });
+        if (clickResult && clickResult.error) throw new Error(clickResult.error);
+
+        await delay(3000);
+        await injectContentScript(tab.id);
+        await delay(1000);
+
+        const typeResult = await sendToTab(tab.id, { action: 'typeAndSendDM', message: personalizedMsg });
+        if (typeResult && typeResult.error) throw new Error(typeResult.error);
+
+        item.status = 'sent';
+
+        await saveDMHistory({
+          username: item.username,
+          status: 'messaged',
+          message: `${item.cadenceHours}h follow-up sent`,
+          templateName: item.templateName,
+          cadenceStep: item.cadenceHours,
+          timestamp: Date.now(),
+          viewed: true,
+          followed: false
+        });
+
+      } else {
+        item.status = 'skipped';
+      }
+
+    } catch (err) {
+      item.status = 'error';
+      item.errorMessage = err.message;
+    }
+
+    await delay(5000);
+  }
+
+  // Update queue: keep only pending items
+  const updatedQueue = queue.filter(item => item.status === 'pending');
+  await chrome.storage.local.set({ cadenceQueue: updatedQueue });
+  broadcastCadenceUpdate();
+  broadcastHistoryUpdate();
 }
 
 
@@ -406,7 +580,6 @@ async function runWaitlistRecheck(waitlist) {
       const profileCheck = await sendToTab(boState.tabId, { action: 'checkProfileActions' });
 
       if (profileCheck && profileCheck.hasMessage) {
-        // They accepted! Send DM
         broadcastWaitlistProgress(user.username, 'checking', `Message button found — sending DM...`, i, waitlist.length, results);
 
         const clickResult = await sendToTab(boState.tabId, { action: 'clickMessageButton' });
@@ -421,9 +594,19 @@ async function runWaitlistRecheck(waitlist) {
 
         broadcastWaitlistProgress(user.username, 'dm-sent', `DM sent to @${user.username}!`, i, waitlist.length, results);
         results.push({ username: user.username, status: 'dm-sent' });
-        await saveDMHistory({ username: user.username, status: 'success', message: `DM sent (waitlist re-check, ${user.templateName})`, timestamp: new Date().toISOString() });
+
+        // Update history: mark as messaged
+        await saveDMHistory({
+          username: user.username,
+          status: 'messaged',
+          message: `DM sent (waitlist re-check, ${user.templateName})`,
+          templateName: user.templateName,
+          timestamp: Date.now(),
+          viewed: true,
+          followed: true
+        });
+
       } else {
-        // Still no Message button
         broadcastWaitlistProgress(user.username, 'still-waiting', `@${user.username} — still no Message button`, i, waitlist.length, results);
         results.push({ username: user.username, status: 'still-waiting' });
         remaining.push(user);
@@ -435,14 +618,10 @@ async function runWaitlistRecheck(waitlist) {
       remaining.push(user);
     }
 
-    // Short delay between checks
     if (i < waitlist.length - 1) await delay(5000);
   }
 
-  // Update waitlist with only remaining users
   await chrome.storage.local.set({ boWaitlist: remaining });
-
-  // Final broadcast
   broadcastWaitlistProgress('', 'done', 'Re-check complete', waitlist.length, waitlist.length, results);
 }
 
@@ -514,6 +693,14 @@ function broadcastWaitlistProgress(username, substep, detail, currentIndex, tota
   }).catch(() => {});
 }
 
+function broadcastCadenceUpdate() {
+  chrome.runtime.sendMessage({ action: 'cadenceUpdate' }).catch(() => {});
+}
+
+function broadcastHistoryUpdate() {
+  chrome.runtime.sendMessage({ action: 'historyUpdate' }).catch(() => {});
+}
+
 /** Cancellable delay — resolves early if shouldCancel returns true */
 function delay(ms, checkCancel = false, shouldCancel = null) {
   if (!checkCancel || !shouldCancel) return new Promise(r => setTimeout(r, ms));
@@ -530,7 +717,23 @@ function delay(ms, checkCancel = false, shouldCancel = null) {
 async function saveDMHistory(entry) {
   const data = await chrome.storage.local.get('dmHistory');
   const history = data.dmHistory || [];
-  history.unshift(entry);
+
+  // Check if this user already has a history entry — update it instead of duplicating
+  const existingIdx = history.findIndex(h => h.username === entry.username && !h.cadenceStep);
+  if (existingIdx >= 0 && !entry.cadenceStep) {
+    // Merge: keep the most advanced status
+    const existing = history[existingIdx];
+    history[existingIdx] = {
+      ...existing,
+      ...entry,
+      viewed: existing.viewed || entry.viewed,
+      followed: existing.followed || entry.followed,
+      timestamp: entry.timestamp
+    };
+  } else {
+    history.unshift(entry);
+  }
+
   if (history.length > 500) history.length = 500;
   await chrome.storage.local.set({ dmHistory: history });
 }

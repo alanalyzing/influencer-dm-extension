@@ -1,21 +1,25 @@
 /**
- * Side Panel Controller (v4)
+ * Side Panel Controller (v5)
  *
  * Two modes:
- *   1. Keyword Scan — scan post comments for keywords, send DMs
- *   2. Bulk Outreach — provide handle list, connect/follow, send DMs with templates
+ *   1. Bulk Outreach (primary) — handle list, templates, status lights, history, cadence
+ *   2. Keyword Scan — scan post comments for keywords, send DMs
  *
- * Progress granularity for DM sending:
- *   Per user: navigating → clickingMessage → waitingDM → typing → sending → done/error
+ * New in v5:
+ *   - Three-light status per account: viewed / followed / messaged
+ *   - History tab with all sends and filter
+ *   - Auto-cadence follow-up scheduling (6h, 12h, 24h)
+ *   - Full Automation toggle for Bulk Outreach
+ *   - Bulk Outreach is now the default/first tab
  */
 
 document.addEventListener('DOMContentLoaded', async () => {
 
   // ─── DOM refs: Mode Tabs ───
   const modeTabs = document.querySelectorAll('.mode-tab');
-  const modePanels = { keyword: $('modeKeyword'), outreach: $('modeOutreach') };
+  const modePanels = { outreach: $('modeOutreach'), keyword: $('modeKeyword') };
 
-  // ─── DOM refs: Keyword Scan (existing) ───
+  // ─── DOM refs: Keyword Scan ───
   const steps = { 1: $('step1'), 2: $('step2'), 3: $('step3'), 4: $('step4') };
   const stepDots = document.querySelectorAll('.step-dot');
 
@@ -58,7 +62,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // ─── DOM refs: Bulk Outreach ───
   const subTabs          = document.querySelectorAll('.sub-tab');
-  const subPanels        = { 'bo-templates': $('bo-templates'), 'bo-outreach': $('bo-outreach'), 'bo-waitlist': $('bo-waitlist') };
+  const subPanels        = {
+    'bo-outreach': $('bo-outreach'),
+    'bo-history': $('bo-history'),
+    'bo-waitlist': $('bo-waitlist'),
+    'bo-templates': $('bo-templates')
+  };
 
   // Templates
   const templatesList    = $('templatesList');
@@ -74,17 +83,35 @@ document.addEventListener('DOMContentLoaded', async () => {
   const boHandleCount    = $('boHandleCount');
   const boHandleList     = $('boHandleList');
   const boDelayInput     = $('boDelay');
+  const boAutoSend       = $('boAutoSend');
   const btnStartOutreach = $('btnStartOutreach');
 
   const boProgress       = $('boProgress');
   const boProgressBar    = $('boProgressBar');
   const boStatusText     = $('boStatusText');
+  const boStatusBadge    = $('boStatusBadge');
   const boLiveLog        = $('boLiveLog');
   const boActiveActions  = $('boActiveActions');
   const boDoneActions    = $('boDoneActions');
   const btnPauseOutreach = $('btnPauseOutreach');
   const btnBackFromOutreach = $('btnBackFromOutreach');
   const btnNewOutreach   = $('btnNewOutreach');
+
+  // History
+  const historyBadge     = $('historyBadge');
+  const historyCount     = $('historyCount');
+  const historyList      = $('historyList');
+  const btnClearHistory  = $('btnClearHistory');
+  const cadenceQueue     = $('cadenceQueue');
+  const cadenceQueueCount = $('cadenceQueueCount');
+  const cadenceQueueList = $('cadenceQueueList');
+
+  // Cadence
+  const cadence6h        = $('cadence6h');
+  const cadence12h       = $('cadence12h');
+  const cadence24h       = $('cadence24h');
+  const cadenceTemplateField = $('cadenceTemplateField');
+  const cadenceTemplate  = $('cadenceTemplate');
 
   // Waitlist
   const waitlistBadge    = $('waitlistBadge');
@@ -101,9 +128,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   let currentStep = 1;
   let matchedUsers = [];
   let pollTimer = null;
-  let templates = [];         // { id, name, body, color }
-  let parsedHandles = [];     // { username, templateId }
+  let templates = [];
+  let parsedHandles = [];
   let boPollTimer = null;
+  let editingTemplateIdx = -1;
+  let currentHistoryFilter = 'all';
 
   const TEMPLATE_COLORS = ['#833ab4', '#fd1d1d', '#fcb045', '#0095f6', '#2ecc71', '#e74c3c', '#9b59b6', '#1abc9c'];
 
@@ -113,6 +142,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   await restoreState();
   await refreshPendingFollows();
   await refreshWaitlist();
+  await refreshHistory();
+  await refreshCadenceQueue();
+  setupCadenceToggles();
 
   // ─── Listen for real-time progress from background ───
   chrome.runtime.onMessage.addListener((msg) => {
@@ -120,6 +152,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (msg.action === 'dmProgressUpdate') handleDMProgressUpdate(msg);
     if (msg.action === 'boProgressUpdate') handleBOProgressUpdate(msg);
     if (msg.action === 'waitlistCheckUpdate') handleWaitlistCheckUpdate(msg);
+    if (msg.action === 'cadenceUpdate') refreshCadenceQueue();
+    if (msg.action === 'historyUpdate') refreshHistory();
   });
 
 
@@ -131,7 +165,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     tab.addEventListener('click', () => {
       const mode = tab.dataset.mode;
       modeTabs.forEach(t => t.classList.toggle('active', t === tab));
-      Object.entries(modePanels).forEach(([k, v]) => v.classList.toggle('active', k === mode));
+      Object.entries(modePanels).forEach(([k, v]) => { if (v) v.classList.toggle('active', k === mode); });
     });
   });
 
@@ -140,8 +174,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     tab.addEventListener('click', () => {
       const id = tab.dataset.subtab;
       subTabs.forEach(t => t.classList.toggle('active', t === tab));
-      Object.entries(subPanels).forEach(([k, v]) => v.classList.toggle('active', k === id));
+      Object.entries(subPanels).forEach(([k, v]) => { if (v) v.classList.toggle('active', k === id); });
       if (id === 'bo-waitlist') refreshWaitlist();
+      if (id === 'bo-history') { refreshHistory(); refreshCadenceQueue(); }
     });
   });
 
@@ -152,14 +187,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function goToStep(n) {
     currentStep = n;
-    Object.values(steps).forEach(el => el.classList.remove('active'));
-    steps[n].classList.add('active');
+    Object.values(steps).forEach(el => { if (el) el.classList.remove('active'); });
+    if (steps[n]) steps[n].classList.add('active');
     stepDots.forEach(dot => {
       const s = parseInt(dot.dataset.step);
       dot.classList.toggle('active', s === n);
       dot.classList.toggle('completed', s < n);
     });
   }
+
 
   // ═══════════════════════════════════════════
   //  KEYWORD SCAN: STEP 1 CONFIGURE
@@ -235,6 +271,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     scanLiveLog.scrollTop = scanLiveLog.scrollHeight;
   }
 
+
   // ═══════════════════════════════════════════
   //  KEYWORD SCAN: STEP 3 REVIEW
   // ═══════════════════════════════════════════
@@ -247,14 +284,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
     bg({ action: 'getHistory' }).then(({ history }) => {
-      const sentSet = new Set((history || []).filter(h => h.status === 'success').map(h => h.username));
+      const sentSet = new Set((history || []).filter(h => h.status === 'messaged').map(h => h.username));
       matchedList.innerHTML = matchedUsers.map((u, i) => `
         <div class="match-item">
           <input type="checkbox" class="match-cb" data-i="${i}" ${sentSet.has(u.username) ? '' : 'checked'} />
           <div class="match-avatar">${u.username[0].toUpperCase()}</div>
           <div class="match-info">
             <div class="match-username">@${u.username} ${sentSet.has(u.username) ? '<span class="already-sent">Already sent</span>' : ''}</div>
-            <div class="match-comment">"${u.comment}" <span class="match-keyword">${u.matchedKeyword}</span></div>
+            <div class="match-comment">"${escHtml(u.comment)}" <span class="match-keyword">${escHtml(u.matchedKeyword)}</span></div>
           </div>
         </div>
       `).join('');
@@ -274,6 +311,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   btnSelectAll.addEventListener('click', () => { matchedList.querySelectorAll('.match-cb').forEach(cb => cb.checked = true); updateCount(); });
   btnDeselectAll.addEventListener('click', () => { matchedList.querySelectorAll('.match-cb').forEach(cb => cb.checked = false); updateCount(); });
   btnBackToConfig.addEventListener('click', async () => { await bg({ action: 'reset' }); goToStep(1); });
+
 
   // ═══════════════════════════════════════════
   //  KEYWORD SCAN: STEP 3 → 4 START DMs
@@ -300,6 +338,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!selected.length) return;
     await startDMsForUsers(selected);
   });
+
 
   // ═══════════════════════════════════════════
   //  KEYWORD SCAN: STEP 4 DM PROGRESS
@@ -330,6 +369,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       dmActiveActions.style.display = 'none';
       clearInterval(pollTimer);
       refreshPendingFollows();
+      refreshHistory();
     }
   }
 
@@ -369,7 +409,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     else { icon.className = 'log-icon active'; icon.textContent = ''; }
 
     const allSubsteps = container.querySelectorAll('.log-substep');
-    let reachedCurrent = false;
 
     if (substep === 'following' || substep === 'followed') {
       for (const el of allSubsteps) {
@@ -389,6 +428,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         else { el.className = 'log-substep done'; el.querySelector('.substep-icon').textContent = '\u2713'; }
       }
     } else {
+      let reachedCurrent = false;
       for (const el of allSubsteps) {
         const s = el.dataset.substep;
         if (s === substep) { el.className = 'log-substep active'; el.querySelector('.substep-icon').textContent = '\u25CF'; if (detail) el.querySelector('span:last-child').textContent = detail; reachedCurrent = true; }
@@ -458,6 +498,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     goToStep(1);
   });
 
+
   // ═══════════════════════════════════════════
   //  KEYWORD SCAN: PENDING FOLLOWS
   // ═══════════════════════════════════════════
@@ -486,11 +527,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (e) { pendingSection.style.display = 'none'; }
   }
 
-  pendingToggle.addEventListener('click', () => {
-    const isOpen = pendingBody.style.display !== 'none';
-    pendingBody.style.display = isOpen ? 'none' : 'block';
-    pendingToggle.classList.toggle('open', !isOpen);
-  });
+  if (pendingToggle) {
+    pendingToggle.addEventListener('click', () => {
+      const isOpen = pendingBody.style.display !== 'none';
+      pendingBody.style.display = isOpen ? 'none' : 'block';
+      pendingToggle.classList.toggle('open', !isOpen);
+    });
+  }
 
   btnRetryPending.addEventListener('click', async () => {
     const dmTemplate = dmTemplateInput.value.trim();
@@ -521,8 +564,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     populateTemplateDropdowns();
   }
 
-  let editingTemplateIdx = -1; // Track which template is being edited
-
   function renderTemplates() {
     if (!templates.length) {
       templatesList.innerHTML = '<div class="empty-state">No templates yet. Add one below.</div>';
@@ -552,24 +593,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       </div>
     `).join('');
 
-    // Wire up edit buttons
     templatesList.querySelectorAll('.template-btn.edit').forEach(btn => {
-      btn.addEventListener('click', () => {
-        editingTemplateIdx = parseInt(btn.dataset.idx);
-        renderTemplates();
-      });
+      btn.addEventListener('click', () => { editingTemplateIdx = parseInt(btn.dataset.idx); renderTemplates(); });
     });
 
-    // Wire up delete buttons
     templatesList.querySelectorAll('.template-btn.delete').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        templates.splice(parseInt(btn.dataset.idx), 1);
-        editingTemplateIdx = -1;
-        await saveTemplates();
-      });
+      btn.addEventListener('click', async () => { templates.splice(parseInt(btn.dataset.idx), 1); editingTemplateIdx = -1; await saveTemplates(); });
     });
 
-    // Wire up save buttons (inline edit)
     templatesList.querySelectorAll('.template-save-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         const idx = parseInt(btn.dataset.idx);
@@ -584,23 +615,25 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
     });
 
-    // Wire up cancel buttons (inline edit)
     templatesList.querySelectorAll('.template-cancel-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        editingTemplateIdx = -1;
-        renderTemplates();
-      });
+      btn.addEventListener('click', () => { editingTemplateIdx = -1; renderTemplates(); });
     });
   }
 
   function populateTemplateDropdowns() {
-    // Default template dropdown
     const val = boDefaultTemplate.value;
-    boDefaultTemplate.innerHTML = '<option value="">— Select a template —</option>' +
+    boDefaultTemplate.innerHTML = '<option value="">-- Select --</option>' +
       templates.map(t => `<option value="${t.id}">${escHtml(t.name)}</option>`).join('');
     if (val) boDefaultTemplate.value = val;
 
-    // Per-handle dropdowns
+    // Cadence follow-up template dropdown
+    const cVal = cadenceTemplate ? cadenceTemplate.value : '';
+    if (cadenceTemplate) {
+      cadenceTemplate.innerHTML = '<option value="">-- Select --</option>' +
+        templates.map(t => `<option value="${t.id}">${escHtml(t.name)}</option>`).join('');
+      if (cVal) cadenceTemplate.value = cVal;
+    }
+
     document.querySelectorAll('.handle-template-select').forEach(sel => {
       const v = sel.value;
       sel.innerHTML = templates.map(t => `<option value="${t.id}">${escHtml(t.name)}</option>`).join('');
@@ -613,17 +646,35 @@ document.addEventListener('DOMContentLoaded', async () => {
     const body = newTemplateBody.value.trim();
     if (!name) return flash(newTemplateName);
     if (!body) return flash(newTemplateBody);
-
-    templates.push({
-      id: 'tpl_' + Date.now(),
-      name,
-      body,
-      color: TEMPLATE_COLORS[templates.length % TEMPLATE_COLORS.length]
-    });
+    templates.push({ id: 'tpl_' + Date.now(), name, body, color: TEMPLATE_COLORS[templates.length % TEMPLATE_COLORS.length] });
     await saveTemplates();
     newTemplateName.value = '';
     newTemplateBody.value = '';
   });
+
+
+  // ═══════════════════════════════════════════════════════════════
+  //  BULK OUTREACH: CADENCE TOGGLE
+  // ═══════════════════════════════════════════════════════════════
+
+  function setupCadenceToggles() {
+    const checks = [cadence6h, cadence12h, cadence24h].filter(Boolean);
+    checks.forEach(cb => {
+      cb.addEventListener('change', () => {
+        const anyChecked = checks.some(c => c.checked);
+        if (cadenceTemplateField) cadenceTemplateField.style.display = anyChecked ? 'block' : 'none';
+      });
+    });
+  }
+
+  function getCadenceConfig() {
+    const intervals = [];
+    if (cadence6h && cadence6h.checked) intervals.push(6);
+    if (cadence12h && cadence12h.checked) intervals.push(12);
+    if (cadence24h && cadence24h.checked) intervals.push(24);
+    const followUpTemplateId = cadenceTemplate ? cadenceTemplate.value : '';
+    return { intervals, followUpTemplateId };
+  }
 
 
   // ═══════════════════════════════════════════════════════════════
@@ -643,22 +694,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       </div>
     `).join('');
 
-    // Wire up per-handle template changes
     boHandleList.querySelectorAll('.handle-template-select').forEach(sel => {
-      sel.addEventListener('change', () => {
-        parsedHandles[parseInt(sel.dataset.idx)].templateId = sel.value;
-      });
+      sel.addEventListener('change', () => { parsedHandles[parseInt(sel.dataset.idx)].templateId = sel.value; });
     });
 
-    // Wire up remove buttons
     boHandleList.querySelectorAll('.handle-remove').forEach(btn => {
       btn.addEventListener('click', () => {
         parsedHandles.splice(parseInt(btn.dataset.idx), 1);
-        if (parsedHandles.length === 0) {
-          boHandleAssignments.style.display = 'none';
-          btnStartOutreach.style.display = 'none';
-          return;
-        }
+        if (parsedHandles.length === 0) { boHandleAssignments.style.display = 'none'; btnStartOutreach.style.display = 'none'; return; }
         renderHandleList();
       });
     });
@@ -669,9 +712,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!raw) return flash(boHandlesInput);
     if (!templates.length) {
       flash(newTemplateName);
-      // Switch to templates tab
       subTabs.forEach(t => t.classList.toggle('active', t.dataset.subtab === 'bo-templates'));
-      Object.entries(subPanels).forEach(([k, v]) => v.classList.toggle('active', k === 'bo-templates'));
+      Object.entries(subPanels).forEach(([k, v]) => { if (v) v.classList.toggle('active', k === 'bo-templates'); });
       return;
     }
 
@@ -684,12 +726,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     boHandleAssignments.style.display = 'block';
     btnStartOutreach.style.display = 'flex';
+
+    // If full auto, start immediately
+    if (boAutoSend && boAutoSend.checked) {
+      btnStartOutreach.click();
+    }
   });
 
   btnStartOutreach.addEventListener('click', async () => {
     if (!parsedHandles.length) return;
 
-    // Build the outreach list with resolved template bodies
     const outreachList = parsedHandles.map(h => {
       const tpl = templates.find(t => t.id === h.templateId);
       return {
@@ -701,21 +747,27 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     const delaySec = parseInt(boDelayInput.value) || 30;
+    const cadenceConfig = getCadenceConfig();
 
     // Show progress
     boProgress.style.display = 'block';
     boLiveLog.innerHTML = '';
     boProgressBar.style.width = '0%';
     boStatusText.textContent = `Processing: 0 / ${outreachList.length}`;
+    boStatusBadge.textContent = 'Running';
+    boStatusBadge.className = 'status-badge running';
     boDoneActions.style.display = 'none';
     boActiveActions.style.display = 'flex';
     btnPauseOutreach.textContent = 'Pause';
     btnBackFromOutreach.style.display = 'none';
 
-    // Pre-populate log
+    // Pre-populate log with status lights
     outreachList.forEach(u => addBOUserEntry(u.username, u.templateName));
 
-    await bg({ action: 'startBulkOutreach', outreachList, delaySeconds: delaySec });
+    // Scroll to progress card
+    boProgress.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    await bg({ action: 'startBulkOutreach', outreachList, delaySeconds: delaySec, cadenceConfig });
     startBOPolling(outreachList);
   });
 
@@ -726,7 +778,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     entry.innerHTML = `
       <div class="log-icon pending"></div>
       <div class="log-body">
-        <div class="log-username">@${username} <span class="waitlist-template-name">${escHtml(templateName)}</span></div>
+        <div class="log-username" style="display:flex;align-items:center;gap:8px;">
+          @${username}
+          <div class="status-lights" id="lights-${username}">
+            <div class="status-light" data-light="viewed" title="Viewed"></div>
+            <div class="status-light" data-light="followed" title="Followed"></div>
+            <div class="status-light" data-light="messaged" title="Messaged"></div>
+          </div>
+          <span class="waitlist-template-name">${escHtml(templateName)}</span>
+        </div>
         <div class="log-substeps" id="bo-substeps-${username}">
           <div class="log-substep waiting" data-substep="checking"><span class="substep-icon">\u25CB</span><span>Checking profile...</span></div>
           <div class="log-substep waiting" data-substep="action"><span class="substep-icon">\u25CB</span><span>Determining action...</span></div>
@@ -738,13 +798,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     boLiveLog.appendChild(entry);
   }
 
+  function updateStatusLight(username, light) {
+    const container = document.getElementById(`lights-${username}`);
+    if (!container) return;
+    const dot = container.querySelector(`[data-light="${light}"]`);
+    if (dot) dot.classList.add(light);
+  }
+
   function handleBOProgressUpdate(msg) {
     const { username, substep, detail, currentIndex, total, sentLog } = msg;
     const pct = total > 0 ? Math.round(((sentLog?.length || 0) / total) * 100) : 0;
     boProgressBar.style.width = `${pct}%`;
     boStatusText.textContent = `Processing: ${sentLog?.length || 0} / ${total}`;
 
-    if (username) updateBOUserEntry(username, substep, detail);
+    if (username) {
+      updateBOUserEntry(username, substep, detail);
+
+      // Update status lights based on substep
+      if (substep === 'checking') updateStatusLight(username, 'viewed');
+      if (substep === 'following' || substep === 'waitlisted') updateStatusLight(username, 'followed');
+      if (substep === 'done') { updateStatusLight(username, 'viewed'); updateStatusLight(username, 'messaged'); }
+      if (substep === 'dm-direct') { updateStatusLight(username, 'viewed'); }
+      if (substep === 'typing') { updateStatusLight(username, 'viewed'); }
+    }
 
     if (sentLog && sentLog.length >= total) {
       const dmSent = sentLog.filter(l => l.status === 'success').length;
@@ -753,10 +829,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       let msg2 = `Complete! ${dmSent} DMs sent.`;
       if (waitlisted > 0) msg2 += ` ${waitlisted} added to waitlist.`;
       boStatusText.textContent = msg2;
+      boStatusBadge.textContent = 'Done';
+      boStatusBadge.className = 'status-badge done';
       boDoneActions.style.display = 'flex';
       boActiveActions.style.display = 'none';
       clearInterval(boPollTimer);
       refreshWaitlist();
+      refreshHistory();
+      refreshCadenceQueue();
     }
   }
 
@@ -818,13 +898,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         const s = await bg({ action: 'getBOState' });
         if (s.status === 'done') {
           clearInterval(boPollTimer);
+          boStatusBadge.textContent = 'Done';
+          boStatusBadge.className = 'status-badge done';
           boDoneActions.style.display = 'flex';
           boActiveActions.style.display = 'none';
         } else if (s.status === 'paused') {
           boStatusText.textContent = `Paused — ${s.sentLog?.length || 0} / ${outreachList.length} processed`;
+          boStatusBadge.textContent = 'Paused';
+          boStatusBadge.className = 'status-badge paused';
           btnPauseOutreach.textContent = 'Resume';
           btnBackFromOutreach.style.display = 'inline-flex';
         } else {
+          boStatusBadge.textContent = 'Running';
+          boStatusBadge.className = 'status-badge running';
           btnPauseOutreach.textContent = 'Pause';
           btnBackFromOutreach.style.display = 'none';
         }
@@ -836,6 +922,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const s = await bg({ action: 'getBOState' });
     if (s.status === 'done') {
       clearInterval(boPollTimer);
+      boStatusBadge.textContent = 'Done';
+      boStatusBadge.className = 'status-badge done';
       boDoneActions.style.display = 'flex';
       boActiveActions.style.display = 'none';
     }
@@ -863,7 +951,134 @@ document.addEventListener('DOMContentLoaded', async () => {
     boHandlesInput.value = '';
     parsedHandles = [];
     await refreshWaitlist();
+    await refreshHistory();
   });
+
+
+  // ═══════════════════════════════════════════════════════════════
+  //  BULK OUTREACH: HISTORY
+  // ═══════════════════════════════════════════════════════════════
+
+  async function refreshHistory() {
+    try {
+      const { history } = await bg({ action: 'getHistory' });
+      const items = history || [];
+
+      // Update badge
+      if (historyBadge) { historyBadge.textContent = items.length; historyBadge.style.display = items.length > 0 ? 'inline-flex' : 'none'; }
+      if (historyCount) historyCount.textContent = items.length;
+
+      renderHistoryList(items);
+    } catch (e) {
+      if (historyList) historyList.innerHTML = '<div class="empty-state">No history yet.</div>';
+    }
+  }
+
+  function renderHistoryList(items) {
+    if (!historyList) return;
+
+    // Apply filter
+    let filtered = items;
+    if (currentHistoryFilter !== 'all') {
+      filtered = items.filter(h => h.status === currentHistoryFilter);
+    }
+
+    if (!filtered.length) {
+      historyList.innerHTML = `<div class="empty-state">No ${currentHistoryFilter === 'all' ? '' : currentHistoryFilter + ' '}entries yet.</div>`;
+      return;
+    }
+
+    // Sort newest first
+    filtered.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+    historyList.innerHTML = `
+      <div class="status-lights-legend">
+        <div class="legend-item"><div class="legend-dot viewed"></div>Viewed</div>
+        <div class="legend-item"><div class="legend-dot followed"></div>Followed</div>
+        <div class="legend-item"><div class="legend-dot messaged"></div>Messaged</div>
+      </div>
+    ` + filtered.map(h => {
+      const date = h.timestamp ? new Date(h.timestamp) : null;
+      const dateStr = date ? date.toLocaleDateString() : '';
+      const timeStr = date ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+      const tplName = h.templateName || '';
+
+      return `<div class="history-item">
+        <div class="history-avatar">${(h.username || '?')[0].toUpperCase()}</div>
+        <div class="history-info">
+          <div class="history-username" style="display:flex;align-items:center;gap:8px;">
+            @${escHtml(h.username)}
+            <div class="status-lights">
+              <div class="status-light ${h.viewed ? 'viewed' : ''}" title="Viewed"></div>
+              <div class="status-light ${h.followed ? 'followed' : ''}" title="Followed"></div>
+              <div class="status-light ${h.status === 'messaged' ? 'messaged' : ''}" title="Messaged"></div>
+            </div>
+          </div>
+          <div class="history-meta">
+            ${tplName ? `<span class="history-template-tag">${escHtml(tplName)}</span>` : ''}
+            ${h.cadenceStep ? `<span class="history-cadence-tag">${h.cadenceStep}h follow-up</span>` : ''}
+          </div>
+        </div>
+        <div class="history-time">${dateStr}<br/>${timeStr}</div>
+      </div>`;
+    }).join('');
+  }
+
+  // History filter buttons
+  document.querySelectorAll('.filter-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      currentHistoryFilter = btn.dataset.filter;
+      document.querySelectorAll('.filter-btn').forEach(b => b.classList.toggle('active', b === btn));
+      await refreshHistory();
+    });
+  });
+
+  if (btnClearHistory) {
+    btnClearHistory.addEventListener('click', async () => {
+      await bg({ action: 'clearHistory' });
+      await refreshHistory();
+    });
+  }
+
+
+  // ═══════════════════════════════════════════════════════════════
+  //  BULK OUTREACH: CADENCE QUEUE
+  // ═══════════════════════════════════════════════════════════════
+
+  async function refreshCadenceQueue() {
+    try {
+      const { cadenceQueue: queue } = await bg({ action: 'getCadenceQueue' });
+      const items = queue || [];
+
+      if (cadenceQueue) cadenceQueue.style.display = items.length > 0 ? 'block' : 'none';
+      if (cadenceQueueCount) cadenceQueueCount.textContent = items.length;
+
+      if (cadenceQueueList && items.length > 0) {
+        cadenceQueueList.innerHTML = items.map(item => {
+          const sendAt = new Date(item.sendAt);
+          const now = Date.now();
+          const diffMs = sendAt.getTime() - now;
+          const diffH = Math.max(0, Math.floor(diffMs / 3600000));
+          const diffM = Math.max(0, Math.floor((diffMs % 3600000) / 60000));
+          const countdown = diffMs > 0 ? `${diffH}h ${diffM}m` : 'Due now';
+
+          return `<div class="cadence-queue-item">
+            <div class="handle-avatar">${(item.username || '?')[0].toUpperCase()}</div>
+            <div>
+              <div class="cadence-queue-username">@${escHtml(item.username)}</div>
+              <div class="cadence-queue-countdown">${item.cadenceHours}h follow-up</div>
+            </div>
+            <div class="cadence-queue-time">${countdown}</div>
+          </div>`;
+        }).join('');
+      } else if (cadenceQueueList) {
+        cadenceQueueList.innerHTML = '';
+      }
+    } catch (e) {}
+  }
+
+  // Refresh cadence queue every 60 seconds
+  setInterval(refreshCadenceQueue, 60000);
 
 
   // ═══════════════════════════════════════════════════════════════
@@ -875,9 +1090,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       const { waitlist } = await bg({ action: 'getWaitlist' });
       const count = (waitlist || []).length;
 
-      waitlistBadge.textContent = count;
-      waitlistBadge.style.display = count > 0 ? 'inline-flex' : 'none';
-      waitlistCount.textContent = count;
+      if (waitlistBadge) { waitlistBadge.textContent = count; waitlistBadge.style.display = count > 0 ? 'inline-flex' : 'none'; }
+      if (waitlistCount) waitlistCount.textContent = count;
 
       if (count > 0) {
         waitlistList.innerHTML = waitlist.map(u => {
@@ -904,12 +1118,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   btnRecheckWaitlist.addEventListener('click', async () => {
     const { waitlist } = await bg({ action: 'getWaitlist' });
     if (!waitlist || !waitlist.length) return;
-
     waitlistProgress.style.display = 'block';
     waitlistLiveLog.innerHTML = '';
     waitlistProgressBar.style.width = '0%';
     waitlistStatusText.textContent = `Re-checking: 0 / ${waitlist.length}`;
-
     await bg({ action: 'recheckWaitlist' });
   });
 
@@ -930,6 +1142,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       waitlistStatusText.textContent = `Done! ${sent} DMs sent. ${total - sent} still waiting.`;
       waitlistProgressBar.style.width = '100%';
       refreshWaitlist();
+      refreshHistory();
     }
   }
 
@@ -997,6 +1210,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function flash(input) {
+    if (!input) return;
     input.style.borderColor = '#ed4956';
     input.style.boxShadow = '0 0 0 3px rgba(237,73,86,0.15)';
     setTimeout(() => { input.style.borderColor = ''; input.style.boxShadow = ''; }, 2000);
