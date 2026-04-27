@@ -1,128 +1,75 @@
-# Influencer DM Manager — Chrome Extension (v4)
+# Influencer DM Manager
 
-A Chrome Extension for automating influencer engagement on Instagram. Two modes:
+A powerful, 100% local Chrome Extension for automating Instagram influencer engagement. This tool operates directly in your browser by interacting with the Instagram DOM — **no AI, no API keys, and no external servers required.**
 
-1. **Keyword Scan** — Scan an Instagram post's comments for specific keywords and auto-DM matching commenters.
-2. **Bulk Outreach** — Provide a list of Instagram handles, connect/follow if needed, and send personalized DMs using pre-configured templates.
+## Features
 
----
+The extension provides two distinct modes of operation, accessible via tabs in the side panel:
+
+### 1. Bulk Outreach (Handle List)
+Provide a list of Instagram handles and automatically connect and message them based on their account type.
+
+* **Smart Follow/DM Logic:**
+  * **Public/Connected Accounts:** If the "Message" button is visible, it sends the DM immediately.
+  * **Public (Not Followed):** Clicks "Follow", waits for the "Message" button to appear, and sends the DM.
+  * **Private Accounts:** Clicks "Follow", detects the "Requested" status, and adds the user to a Waitlist for later follow-up once approved.
+* **Template Manager:** Create multiple color-coded DM templates (e.g., "Collab Invite", "Product Gifting") with `{{username}}` personalization.
+* **Auto-Cadence Follow-ups:** Schedule automated follow-up messages at 6h, 12h, and 24h intervals after the initial DM.
+* **Three-Light Status Tracking:** Visual indicators for each user showing if their profile was Viewed (Blue), Followed (Orange), and Messaged (Green).
+* **History & Waitlist:** Track all past interactions, filter by status, and easily re-check waitlisted users to send DMs once they accept your follow request.
+
+### 2. Keyword Scan (Post Comments)
+Automate the process of finding and messaging users who express interest in a specific Instagram post.
+
+* **Comment Scraping:** Automatically scrolls through all comments on a target post, expanding replies to capture every interaction.
+* **Keyword Matching:** Identifies users who commented with specific trigger words (e.g., "photo", "link", "guide").
+* **Automated DMing:** Navigates to each matched user's profile and sends a personalized templated message.
+
+## Use Cases
+
+### Use Case 1: The "Comment for Link" Funnel
+**Scenario:** You post a reel or carousel offering a free guide, preset, or link, asking followers to "Comment 'GUIDE' to get it in your DMs."
+**Workflow:**
+1. Open the **Keyword Scan** tab.
+2. Enter the post URL and the keyword "guide".
+3. Set your DM template: `"Hey {{username}}! Here is the link to the guide you requested: [link]"`
+4. The extension scans all comments, finds everyone who typed "guide", and automatically delivers the link to their DMs.
+
+### Use Case 2: Cold Influencer Outreach Campaign
+**Scenario:** Your brand is launching a new product and you have a spreadsheet of 100 micro-influencers you want to invite for a gifting collaboration.
+**Workflow:**
+1. Open the **Bulk Outreach** tab and create a template named "Gifting Collab".
+2. Paste the 100 handles into the Outreach list.
+3. Enable **Full Automation** and click Start.
+4. The extension handles the rest: it DMs the public accounts immediately, follows the ones that require it, and waitlists the private accounts.
+5. You check the **Waitlist** a few days later and click "Re-check" to DM the private accounts that accepted your follow request.
+
+### Use Case 3: Event Invitation with Automated Follow-ups
+**Scenario:** You are hosting an exclusive creator event and need RSVPs quickly.
+**Workflow:**
+1. In **Bulk Outreach**, create an "Event Invite" template and a "Reminder" template.
+2. Paste your guest list handles.
+3. Check the **24h Follow-up** box and select the "Reminder" template.
+4. The extension sends the initial invites. Exactly 24 hours later, it automatically sends the reminder DM to those same users, ensuring maximum attendance without manual tracking.
 
 ## Installation
 
-1. Download or clone this repository
-2. Open `chrome://extensions/` in Chrome
-3. Enable **Developer mode** (top-right toggle)
-4. Click **Load unpacked** and select the `influencer-dm-extension` folder
-5. Click the extension icon to open the side panel
-6. Make sure you're logged into Instagram in the same Chrome profile
+1. Download or clone this repository.
+2. Open Google Chrome and navigate to `chrome://extensions/`.
+3. Enable **Developer mode** (toggle in the top right corner).
+4. Click **Load unpacked** and select the `influencer-dm-extension` folder.
+5. Pin the extension to your toolbar and click the icon to open the side panel.
+6. Ensure you are logged into Instagram in the same Chrome profile.
 
----
+## Safety & Best Practices
 
-## Mode 1: Keyword Scan
+Because this extension automates actions on your behalf, it is important to use it responsibly to avoid triggering Instagram's anti-spam systems:
 
-### Step-by-step flow
+* **Pacing:** Use a delay of 45–90 seconds between DMs. The default 30s is aggressive and should only be used for small batches.
+* **Volume:** Limit your outreach to 30–50 DMs per day for established accounts, and 15–20 for newer accounts.
+* **Warm-up:** If you have never sent bulk DMs before, start with 5 per day and gradually increase over a few weeks.
+* **Variation:** Avoid sending the exact same message to hundreds of people. Use the `{{username}}` tag and vary your templates.
 
-| Step | What happens |
-|------|-------------|
-| **1. Configure** | Enter the Instagram post URL, keyword(s), DM template, and delay between messages |
-| **2. Scan** | Extension navigates to the post, scrolls the comment area, loads all comments, and matches keywords |
-| **3. Review** | See all matched users, select/deselect who to message, preview the DM |
-| **4. Send DMs** | Automatically opens each user's profile, clicks "Message", types and sends the DM |
+## Technical Details
 
-### Features
-- Case-insensitive keyword matching with word-boundary detection
-- `{{username}}` personalization in DM templates
-- Full Automation toggle to skip the review step
-- Pause/Resume with immediate effect (finishes current user, then stops)
-- "Back to Config" button when paused
-- Plan B: If no "Message" button exists, follows the user and saves to a retry queue
-
----
-
-## Mode 2: Bulk Outreach
-
-### Sub-tabs
-
-#### Reply Directions (Templates)
-Create and manage multiple DM templates. Each template has a name, body text, and color indicator. Templates support `{{username}}` personalization.
-
-#### Outreach
-1. Paste a list of Instagram handles (one per line)
-2. Select a default template, then optionally override per-handle
-3. Click "Start Outreach"
-
-For each handle, the extension:
-- Navigates to their profile
-- Checks for a "Message" button
-  - **If found**: Clicks it, types the assigned template, sends the DM
-  - **If not found**: Clicks "Follow" and adds the user to the **Waitlist**
-
-#### Waitlist
-Users who were followed but couldn't be DM'd are stored here with their assigned template. You can:
-- **Re-check**: The extension revisits each profile. If a "Message" button now exists (they followed back), it sends the DM automatically. Otherwise, they stay on the waitlist.
-- **Clear**: Remove all waitlisted users.
-
----
-
-## Architecture
-
-| Component | Role |
-|-----------|------|
-| `manifest.json` | Manifest V3 with sidePanel, scripting, tabs, storage permissions |
-| `sidepanel.html` | Persistent side panel UI with tabbed navigation |
-| `css/sidepanel.css` | All styling for the side panel |
-| `js/sidepanel.js` | Side panel controller — UI logic, template management, progress display |
-| `js/background.js` | **Orchestrator** — drives all navigation via `chrome.tabs.update()`, re-injects content script, manages DM loops and waitlist |
-| `js/content.js` | **Atomic actions only** — scan comments, check profile buttons, click Message/Follow, type and send DM. Never navigates. |
-| `css/overlay.css` | Minimal content script styles |
-
-### Key design decisions
-- The **content script never navigates**. All navigation is done by the background worker via `chrome.tabs.update()`. This prevents "Lost connection to Instagram tab" errors.
-- After each navigation, the background worker **re-injects** the content script via `chrome.scripting.executeScript()`.
-- A **duplicate-injection guard** (`window.__IEM_CONTENT_V3__`) prevents double message listeners.
-- The side panel **persists across navigations**, showing real-time progress for each sub-step.
-
----
-
-## No AI, No API Keys
-
-This extension is 100% local browser automation:
-- No AI or LLM calls
-- No API keys required
-- No external servers contacted
-- No Instagram API usage
-- Everything runs in your browser using Chrome Extension APIs
-
----
-
-## File Structure
-
-```
-influencer-dm-extension/
-├── manifest.json
-├── sidepanel.html
-├── css/
-│   ├── sidepanel.css
-│   └── overlay.css
-├── js/
-│   ├── background.js
-│   ├── content.js
-│   └── sidepanel.js
-├── icons/
-│   ├── icon16.png
-│   ├── icon48.png
-│   └── icon128.png
-└── README.md
-```
-
----
-
-## Troubleshooting
-
-| Issue | Solution |
-|-------|----------|
-| Side panel doesn't open | Click the extension icon in the toolbar. If not visible, click the puzzle piece icon and pin it. |
-| "Lost connection" errors | Reload the extension from `chrome://extensions/`. |
-| DM not sending | Make sure you're logged into Instagram. Check that the DM input field is visible. |
-| Comments not loading | The post may have restricted comments. Try a different post. |
-| Follow button not found | The profile may be deactivated or have blocked your account. |
+This extension is built using Manifest V3 and utilizes the `chrome.sidePanel`, `chrome.scripting`, and `chrome.storage.local` APIs. It does not use any external APIs or AI models. All DOM interaction is handled via vanilla JavaScript injected directly into the Instagram page context.
