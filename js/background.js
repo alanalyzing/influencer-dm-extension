@@ -358,39 +358,113 @@ async function runBulkOutreachLoop() {
         }
 
       } else {
-        // ── Follow path → Waitlist ──
+        // ── No Message button — need to Follow first ──
         broadcastBOProgress(user.username, 'following', 'No Message button — following...');
 
         const followResult = await sendToTab(boState.tabId, { action: 'clickFollowButton' });
         const followStatus = followResult?.status || 'unknown';
         const alreadyFollowing = followResult?.alreadyFollowing || false;
 
-        await saveToWaitlist({
-          username: user.username,
-          templateId: user.templateId,
-          templateName: user.templateName,
-          dmTemplate: user.dmTemplate,
-          followStatus,
-          alreadyFollowing,
-          timestamp: new Date().toISOString()
-        });
+        // Three cases after follow:
+        //   Case A: Status is "Following" (public account) → DM immediately
+        //   Case B: Status is "Requested" (private account) → Waitlist
+        //   Case C: Already following but no Message button → check if Message appears
 
-        const statusMsg = alreadyFollowing
-          ? `Already following @${user.username} — added to waitlist`
-          : `Followed @${user.username} — added to waitlist`;
-        broadcastBOProgress(user.username, 'waitlisted', statusMsg);
-        boState.sentLog.push({ username: user.username, status: 'waitlisted', message: statusMsg, timestamp: Date.now() });
+        if (followStatus === 'Requested') {
+          // ── CASE B: Private account, needs approval → Waitlist ──
+          await saveToWaitlist({
+            username: user.username,
+            templateId: user.templateId,
+            templateName: user.templateName,
+            dmTemplate: user.dmTemplate,
+            followStatus: 'Requested',
+            alreadyFollowing: false,
+            timestamp: new Date().toISOString()
+          });
 
-        // Save to history with three-light status
-        await saveDMHistory({
-          username: user.username,
-          status: 'followed',
-          message: statusMsg,
-          templateName: user.templateName,
-          timestamp: Date.now(),
-          viewed: true,
-          followed: true
-        });
+          const statusMsg = `Follow requested @${user.username} — added to waitlist (pending approval)`;
+          broadcastBOProgress(user.username, 'waitlisted', statusMsg);
+          boState.sentLog.push({ username: user.username, status: 'waitlisted', message: statusMsg, timestamp: Date.now() });
+
+          await saveDMHistory({
+            username: user.username,
+            status: 'requested',
+            message: statusMsg,
+            templateName: user.templateName,
+            timestamp: Date.now(),
+            viewed: true,
+            followed: true
+          });
+
+        } else {
+          // ── CASE A/C: Following (public) or already following → try to DM now ──
+          broadcastBOProgress(user.username, 'checking', `Followed @${user.username} — checking for Message button...`);
+
+          // Wait for Message button to appear after follow
+          await delay(2000);
+          await injectContentScript(boState.tabId);
+          await delay(500);
+          const msgCheck = await sendToTab(boState.tabId, { action: 'checkForMessageButton' });
+
+          if (msgCheck && msgCheck.found) {
+            // Message button appeared → DM now
+            broadcastBOProgress(user.username, 'dm-direct', 'Message button appeared — clicking...');
+            const clickResult = await sendToTab(boState.tabId, { action: 'clickMessageButton' });
+            if (clickResult && clickResult.error) throw new Error(clickResult.error);
+
+            await delay(3000);
+            await injectContentScript(boState.tabId);
+            await delay(1000);
+
+            broadcastBOProgress(user.username, 'typing', 'Typing message...');
+            const typeResult = await sendToTab(boState.tabId, { action: 'typeAndSendDM', message: personalizedMsg });
+            if (typeResult && typeResult.error) throw new Error(typeResult.error);
+
+            broadcastBOProgress(user.username, 'done', `Followed & DM sent to @${user.username}!`);
+            boState.sentLog.push({ username: user.username, status: 'success', message: 'Followed & DM sent', timestamp: Date.now() });
+
+            await saveDMHistory({
+              username: user.username,
+              status: 'messaged',
+              message: `Followed & DM sent (${user.templateName})`,
+              templateName: user.templateName,
+              timestamp: Date.now(),
+              viewed: true,
+              followed: true
+            });
+
+            // Schedule cadence follow-ups if configured
+            if (boState.cadenceConfig && boState.cadenceConfig.intervals && boState.cadenceConfig.intervals.length > 0) {
+              await scheduleCadenceFollowUps(user, boState.cadenceConfig);
+            }
+
+          } else {
+            // Message button still not visible even after follow → Waitlist
+            await saveToWaitlist({
+              username: user.username,
+              templateId: user.templateId,
+              templateName: user.templateName,
+              dmTemplate: user.dmTemplate,
+              followStatus: alreadyFollowing ? 'AlreadyFollowing' : followStatus,
+              alreadyFollowing,
+              timestamp: new Date().toISOString()
+            });
+
+            const statusMsg = `Followed @${user.username} but Message button not available — added to waitlist`;
+            broadcastBOProgress(user.username, 'waitlisted', statusMsg);
+            boState.sentLog.push({ username: user.username, status: 'waitlisted', message: statusMsg, timestamp: Date.now() });
+
+            await saveDMHistory({
+              username: user.username,
+              status: 'followed',
+              message: statusMsg,
+              templateName: user.templateName,
+              timestamp: Date.now(),
+              viewed: true,
+              followed: true
+            });
+          }
+        }
       }
 
     } catch (err) {

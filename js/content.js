@@ -35,6 +35,7 @@
       clickMessageButton: () => handleClickMessageButton(),
       clickFollowButton: () => handleClickFollowButton(),
       checkProfileActions: () => handleCheckProfileActions(),
+      checkForMessageButton: () => handleCheckForMessageButton(),
       typeAndSendDM: () => handleTypeAndSendDM(msg.message),
       ping: () => Promise.resolve({ pong: true })
     };
@@ -310,6 +311,24 @@
 
     // Fallback: couldn't determine
     return { hasMessage: false, hasFollow: false, isFollowing: false, isRequested: false };
+  }
+
+  // ════════════════════════════════════════════════════════════
+  //  ACTION: CHECK FOR MESSAGE BUTTON (after follow, on same page)
+  // ════════════════════════════════════════════════════════════
+
+  async function handleCheckForMessageButton() {
+    // After following, wait up to 8 seconds for a Message button to appear
+    for (let attempt = 0; attempt < 16; attempt++) {
+      for (const el of document.querySelectorAll('div[role="button"], button')) {
+        const text = el.textContent.trim();
+        if (text === 'Message') {
+          return { found: true };
+        }
+      }
+      await sleep(500);
+    }
+    return { found: false };
   }
 
   // ════════════════════════════════════════════════════════════
