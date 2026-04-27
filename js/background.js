@@ -1,16 +1,17 @@
 /**
- * Background Service Worker (v5)
+ * Background Service Worker (v6) — Multi-Platform
  *
  * THE ORCHESTRATOR — drives all navigation and content-script injection.
+ * Now supports both Instagram and Threads.
  *
  * Two modes:
  *   1. Bulk Outreach (primary) — handle list, follow/DM, waitlist, cadence
  *   2. Keyword Scan — scan post comments, send DMs
  *
- * v5 additions:
- *   - Three-light history: viewed / followed / messaged per user
- *   - Cadence queue: scheduled follow-up DMs at 6h, 12h, 24h
- *   - getCadenceQueue / processCadenceQueue handlers
+ * Platform routing:
+ *   - Instagram: instagram.com profiles, DMs via Message button
+ *   - Threads: threads.net profiles for follow, but DMs redirect to Instagram
+ *     (Threads web DMs not yet available)
  */
 
 // ─── State: Keyword Scan ───
@@ -27,7 +28,8 @@ let state = {
   currentIndex: 0,
   tabId: null,
   currentDMStep: '',
-  currentDMUser: ''
+  currentDMUser: '',
+  platform: 'instagram'
 };
 
 // ─── State: Bulk Outreach ───
@@ -38,11 +40,38 @@ let boState = {
   sentLog: [],
   currentIndex: 0,
   tabId: null,
-  cadenceConfig: null  // { intervals: [6,12,24], followUpTemplateId: '' }
+  cadenceConfig: null,
+  platform: 'instagram'
 };
 
 // ─── Cadence timer ───
 let cadenceTimerId = null;
+
+// ─── Platform helpers ───
+function profileUrl(username, platform) {
+  if (platform === 'threads') return `https://www.threads.net/@${username}`;
+  return `https://www.instagram.com/${username}/`;
+}
+
+function platformBaseUrl(platform) {
+  if (platform === 'threads') return 'https://www.threads.net/';
+  return 'https://www.instagram.com/';
+}
+
+function platformTabQuery(platform) {
+  if (platform === 'threads') return 'https://www.threads.net/*';
+  return 'https://www.instagram.com/*';
+}
+
+function contentScriptFile(platform) {
+  if (platform === 'threads') return 'js/threads-content.js';
+  return 'js/content.js';
+}
+
+// For DMs, always use Instagram (Threads has no web DMs)
+function dmProfileUrl(username) {
+  return `https://www.instagram.com/${username}/`;
+}
 
 // ─── Open side panel when extension icon is clicked ───
 chrome.action.onClicked.addListener((tab) => {
@@ -79,6 +108,7 @@ const handlers = {
     state.keywords = msg.keywords;
     state.dmTemplate = msg.dmTemplate;
     state.delaySeconds = msg.delaySeconds || 30;
+    state.platform = msg.platform || 'instagram';
     state.status = 'scanning';
     state.matchedUsers = [];
     state.sentLog = [];
@@ -87,15 +117,20 @@ const handlers = {
     await chrome.storage.local.set({ lastConfig: {
       postUrl: msg.postUrl, keywords: msg.keywords,
       dmTemplate: msg.dmTemplate, delaySeconds: msg.delaySeconds,
-      autoSend: msg.autoSend || false
+      autoSend: msg.autoSend || false, platform: state.platform
     }});
 
     broadcastProgress({ step: 'scan', detail: 'Navigating to post...' });
-    const tab = await getOrCreateIGTab(msg.postUrl);
+
+    // Detect platform from URL if not explicitly set
+    if (msg.postUrl.includes('threads.net')) state.platform = 'threads';
+    else if (msg.postUrl.includes('instagram.com')) state.platform = 'instagram';
+
+    const tab = await getOrCreateTab(msg.postUrl, state.platform);
     state.tabId = tab.id;
     await waitForTabLoad(tab.id);
     await delay(4000);
-    await injectContentScript(tab.id);
+    await injectContentScript(tab.id, state.platform);
     await delay(1000);
     broadcastProgress({ step: 'scan', detail: 'Scrolling comment area and extracting comments...' });
 
@@ -150,6 +185,7 @@ const handlers = {
     boState.outreachList = msg.outreachList;
     boState.delaySeconds = msg.delaySeconds || 30;
     boState.cadenceConfig = msg.cadenceConfig || null;
+    boState.platform = msg.platform || 'instagram';
     boState.status = 'sending';
     boState.currentIndex = 0;
     boState.sentLog = [];
@@ -180,11 +216,11 @@ const handlers = {
     return { success: true };
   },
 
-  recheckWaitlist: async () => {
+  recheckWaitlist: async (msg) => {
     const data = await chrome.storage.local.get('boWaitlist');
     const waitlist = data.boWaitlist || [];
     if (!waitlist.length) return { success: false, error: 'Waitlist empty' };
-    runWaitlistRecheck(waitlist);
+    runWaitlistRecheck(waitlist, msg.platform || 'instagram');
     return { success: true };
   },
 
@@ -209,21 +245,23 @@ const handlers = {
 // ════════════════════════════════════════════════════════════
 
 async function runDMLoop() {
+  // DMs always go through Instagram
   while (state.status === 'sending' && state.currentIndex < state.selectedUsers.length) {
     const user = state.selectedUsers[state.currentIndex];
     const personalizedMsg = state.dmTemplate.replace(/\{\{username\}\}/gi, user.username);
     state.currentDMUser = user.username;
 
     try {
+      // Always navigate to Instagram profile for DMs (even if scan was on Threads)
       state.currentDMStep = 'navigating';
       broadcastDMProgress(user.username, 'navigating', `Opening @${user.username}'s profile...`);
-      await chrome.tabs.update(state.tabId, { url: `https://www.instagram.com/${user.username}/` });
+      await chrome.tabs.update(state.tabId, { url: dmProfileUrl(user.username) });
       await waitForTabLoad(state.tabId);
       await delay(3000);
 
       state.currentDMStep = 'clickingMessage';
       broadcastDMProgress(user.username, 'clickingMessage', 'Finding and clicking "Message" button...');
-      await injectContentScript(state.tabId);
+      await injectContentScript(state.tabId, 'instagram'); // Always Instagram for DMs
       await delay(500);
       const clickResult = await sendToTab(state.tabId, { action: 'clickMessageButton' });
 
@@ -238,7 +276,7 @@ async function runDMLoop() {
         state.currentDMStep = 'followed';
         const statusMsg = alreadyFollowing ? `Already following @${user.username} — saved to retry queue` : `Followed @${user.username} (${followStatus}) — saved to retry queue`;
         broadcastDMProgress(user.username, 'followed', statusMsg);
-        const logEntry = { username: user.username, status: 'followed', message: statusMsg, timestamp: Date.now(), viewed: true, followed: true };
+        const logEntry = { username: user.username, status: 'followed', message: statusMsg, timestamp: Date.now(), viewed: true, followed: true, platform: state.platform };
         state.sentLog.push(logEntry);
         await saveDMHistory(logEntry);
         state.currentIndex++;
@@ -254,7 +292,7 @@ async function runDMLoop() {
       state.currentDMStep = 'waitingDM';
       broadcastDMProgress(user.username, 'waitingDM', 'Waiting for DM conversation to open...');
       await delay(3000);
-      await injectContentScript(state.tabId);
+      await injectContentScript(state.tabId, 'instagram');
       await delay(1000);
 
       state.currentDMStep = 'typing';
@@ -264,14 +302,14 @@ async function runDMLoop() {
 
       state.currentDMStep = 'done';
       broadcastDMProgress(user.username, 'done', 'DM sent successfully!');
-      const logEntry = { username: user.username, status: 'messaged', message: 'DM sent successfully', timestamp: Date.now(), viewed: true, followed: false };
-      state.sentLog.push({ ...logEntry, status: 'success' });
+      const logEntry = { username: user.username, status: 'messaged', message: 'DM sent successfully', timestamp: Date.now(), viewed: true, followed: false, platform: state.platform };
+      state.sentLog.push(logEntry);
       await saveDMHistory(logEntry);
 
     } catch (err) {
       state.currentDMStep = 'error';
       broadcastDMProgress(user.username, 'error', `Error: ${err.message}`);
-      const logEntry = { username: user.username, status: 'error', message: err.message, timestamp: Date.now(), viewed: true, followed: false };
+      const logEntry = { username: user.username, status: 'error', message: err.message, timestamp: Date.now(), viewed: true, followed: false, platform: state.platform };
       state.sentLog.push(logEntry);
       await saveDMHistory(logEntry);
     }
@@ -285,7 +323,7 @@ async function runDMLoop() {
 
   if (state.currentIndex >= state.selectedUsers.length) {
     state.status = 'done';
-    const successCount = state.sentLog.filter(l => l.status === 'success').length;
+    const successCount = state.sentLog.filter(l => l.status === 'messaged').length;
     const followedCount = state.sentLog.filter(l => l.status === 'followed').length;
     let summary = `All done! ${successCount}/${state.selectedUsers.length} DMs sent.`;
     if (followedCount > 0) summary += ` ${followedCount} user(s) followed (pending DM).`;
@@ -295,12 +333,14 @@ async function runDMLoop() {
 
 
 // ════════════════════════════════════════════════════════════
-//  BULK OUTREACH LOOP
+//  BULK OUTREACH LOOP (multi-platform)
 // ════════════════════════════════════════════════════════════
 
 async function runBulkOutreachLoop() {
+  const platform = boState.platform || 'instagram';
+
   if (!boState.tabId) {
-    const tab = await getOrCreateIGTab('https://www.instagram.com/');
+    const tab = await getOrCreateTab(platformBaseUrl(platform), platform);
     boState.tabId = tab.id;
     await waitForTabLoad(tab.id);
     await delay(2000);
@@ -311,27 +351,39 @@ async function runBulkOutreachLoop() {
     const personalizedMsg = (user.dmTemplate || '').replace(/\{\{username\}\}/gi, user.username);
 
     try {
-      // Step 1: Navigate to profile
+      // Step 1: Navigate to profile on the selected platform
       broadcastBOProgress(user.username, 'checking', `Opening @${user.username}'s profile...`);
-      await chrome.tabs.update(boState.tabId, { url: `https://www.instagram.com/${user.username}/` });
+      const pUrl = profileUrl(user.username, platform);
+      await chrome.tabs.update(boState.tabId, { url: pUrl });
       await waitForTabLoad(boState.tabId);
       await delay(3000);
 
-      // Step 2: Inject and check profile
-      await injectContentScript(boState.tabId);
+      // Step 2: Inject platform-specific content script and check profile
+      await injectContentScript(boState.tabId, platform);
       await delay(500);
 
       const profileCheck = await sendToTab(boState.tabId, { action: 'checkProfileActions' });
 
       if (profileCheck && profileCheck.hasMessage) {
         // ── Direct DM path ──
-        broadcastBOProgress(user.username, 'dm-direct', 'Message button found — clicking...');
-
-        const clickResult = await sendToTab(boState.tabId, { action: 'clickMessageButton' });
-        if (clickResult && clickResult.error) throw new Error(clickResult.error);
+        // For Threads: redirect to Instagram for DM since Threads has no web DMs
+        if (platform === 'threads') {
+          broadcastBOProgress(user.username, 'dm-direct', 'Message available — redirecting to Instagram for DM...');
+          await chrome.tabs.update(boState.tabId, { url: dmProfileUrl(user.username) });
+          await waitForTabLoad(boState.tabId);
+          await delay(3000);
+          await injectContentScript(boState.tabId, 'instagram');
+          await delay(500);
+          const igClickResult = await sendToTab(boState.tabId, { action: 'clickMessageButton' });
+          if (igClickResult && igClickResult.error) throw new Error(igClickResult.error);
+        } else {
+          broadcastBOProgress(user.username, 'dm-direct', 'Message button found — clicking...');
+          const clickResult = await sendToTab(boState.tabId, { action: 'clickMessageButton' });
+          if (clickResult && clickResult.error) throw new Error(clickResult.error);
+        }
 
         await delay(3000);
-        await injectContentScript(boState.tabId);
+        await injectContentScript(boState.tabId, 'instagram'); // DM always on Instagram
         await delay(1000);
 
         broadcastBOProgress(user.username, 'typing', 'Typing message...');
@@ -341,7 +393,6 @@ async function runBulkOutreachLoop() {
         broadcastBOProgress(user.username, 'done', 'DM sent!');
         boState.sentLog.push({ username: user.username, status: 'success', message: 'DM sent', timestamp: Date.now() });
 
-        // Save to history with three-light status
         await saveDMHistory({
           username: user.username,
           status: 'messaged',
@@ -349,7 +400,8 @@ async function runBulkOutreachLoop() {
           templateName: user.templateName,
           timestamp: Date.now(),
           viewed: true,
-          followed: false
+          followed: false,
+          platform
         });
 
         // Schedule cadence follow-ups if configured
@@ -365,13 +417,8 @@ async function runBulkOutreachLoop() {
         const followStatus = followResult?.status || 'unknown';
         const alreadyFollowing = followResult?.alreadyFollowing || false;
 
-        // Three cases after follow:
-        //   Case A: Status is "Following" (public account) → DM immediately
-        //   Case B: Status is "Requested" (private account) → Waitlist
-        //   Case C: Already following but no Message button → check if Message appears
-
         if (followStatus === 'Requested') {
-          // ── CASE B: Private account, needs approval → Waitlist ──
+          // ── Private account, needs approval → Waitlist ──
           await saveToWaitlist({
             username: user.username,
             templateId: user.templateId,
@@ -379,7 +426,8 @@ async function runBulkOutreachLoop() {
             dmTemplate: user.dmTemplate,
             followStatus: 'Requested',
             alreadyFollowing: false,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            platform
           });
 
           const statusMsg = `Follow requested @${user.username} — added to waitlist (pending approval)`;
@@ -393,17 +441,28 @@ async function runBulkOutreachLoop() {
             templateName: user.templateName,
             timestamp: Date.now(),
             viewed: true,
-            followed: true
+            followed: true,
+            platform
           });
 
         } else {
-          // ── CASE A/C: Following (public) or already following → try to DM now ──
+          // ── Following (public) or already following → try to DM now ──
           broadcastBOProgress(user.username, 'checking', `Followed @${user.username} — checking for Message button...`);
 
-          // Wait for Message button to appear after follow
-          await delay(2000);
-          await injectContentScript(boState.tabId);
-          await delay(500);
+          // For Threads: after follow, redirect to Instagram for DM
+          if (platform === 'threads') {
+            broadcastBOProgress(user.username, 'dm-direct', 'Followed on Threads — redirecting to Instagram for DM...');
+            await chrome.tabs.update(boState.tabId, { url: dmProfileUrl(user.username) });
+            await waitForTabLoad(boState.tabId);
+            await delay(3000);
+            await injectContentScript(boState.tabId, 'instagram');
+            await delay(500);
+          } else {
+            await delay(2000);
+            await injectContentScript(boState.tabId, platform);
+            await delay(500);
+          }
+
           const msgCheck = await sendToTab(boState.tabId, { action: 'checkForMessageButton' });
 
           if (msgCheck && msgCheck.found) {
@@ -413,7 +472,7 @@ async function runBulkOutreachLoop() {
             if (clickResult && clickResult.error) throw new Error(clickResult.error);
 
             await delay(3000);
-            await injectContentScript(boState.tabId);
+            await injectContentScript(boState.tabId, 'instagram');
             await delay(1000);
 
             broadcastBOProgress(user.username, 'typing', 'Typing message...');
@@ -430,16 +489,16 @@ async function runBulkOutreachLoop() {
               templateName: user.templateName,
               timestamp: Date.now(),
               viewed: true,
-              followed: true
+              followed: true,
+              platform
             });
 
-            // Schedule cadence follow-ups if configured
             if (boState.cadenceConfig && boState.cadenceConfig.intervals && boState.cadenceConfig.intervals.length > 0) {
               await scheduleCadenceFollowUps(user, boState.cadenceConfig);
             }
 
           } else {
-            // Message button still not visible even after follow → Waitlist
+            // Message button still not visible → Waitlist
             await saveToWaitlist({
               username: user.username,
               templateId: user.templateId,
@@ -447,7 +506,8 @@ async function runBulkOutreachLoop() {
               dmTemplate: user.dmTemplate,
               followStatus: alreadyFollowing ? 'AlreadyFollowing' : followStatus,
               alreadyFollowing,
-              timestamp: new Date().toISOString()
+              timestamp: new Date().toISOString(),
+              platform
             });
 
             const statusMsg = `Followed @${user.username} but Message button not available — added to waitlist`;
@@ -461,7 +521,8 @@ async function runBulkOutreachLoop() {
               templateName: user.templateName,
               timestamp: Date.now(),
               viewed: true,
-              followed: true
+              followed: true,
+              platform
             });
           }
         }
@@ -478,7 +539,8 @@ async function runBulkOutreachLoop() {
         templateName: user.templateName,
         timestamp: Date.now(),
         viewed: true,
-        followed: false
+        followed: false,
+        platform
       });
     }
 
@@ -510,7 +572,6 @@ async function scheduleCadenceFollowUps(user, cadenceConfig) {
   const queue = data.cadenceQueue || [];
   const now = Date.now();
 
-  // Get the follow-up template
   let followUpTemplate = user.dmTemplate;
   if (cadenceConfig.followUpTemplateId) {
     const tplData = await chrome.storage.local.get('boTemplates');
@@ -521,7 +582,6 @@ async function scheduleCadenceFollowUps(user, cadenceConfig) {
 
   for (const hours of cadenceConfig.intervals) {
     const sendAt = now + (hours * 3600000);
-    // Don't add duplicate cadence entries
     const exists = queue.some(q => q.username === user.username && q.cadenceHours === hours);
     if (!exists) {
       queue.push({
@@ -542,10 +602,8 @@ async function scheduleCadenceFollowUps(user, cadenceConfig) {
 }
 
 function startCadenceProcessor() {
-  // Check every 2 minutes for due cadence items
   if (cadenceTimerId) clearInterval(cadenceTimerId);
   cadenceTimerId = setInterval(processCadenceQueue, 120000);
-  // Also run once on startup after a short delay
   setTimeout(processCadenceQueue, 10000);
 }
 
@@ -557,12 +615,11 @@ async function processCadenceQueue() {
   const due = queue.filter(item => item.status === 'pending' && item.sendAt <= now);
   if (!due.length) return;
 
-  // Don't process if another operation is running
   if (boState.status === 'sending' || state.status === 'sending') return;
 
   let tab;
   try {
-    tab = await getOrCreateIGTab('https://www.instagram.com/');
+    tab = await getOrCreateTab('https://www.instagram.com/', 'instagram');
     await waitForTabLoad(tab.id);
     await delay(2000);
   } catch (e) { return; }
@@ -571,10 +628,11 @@ async function processCadenceQueue() {
     const personalizedMsg = (item.dmTemplate || '').replace(/\{\{username\}\}/gi, item.username);
 
     try {
-      await chrome.tabs.update(tab.id, { url: `https://www.instagram.com/${item.username}/` });
+      // Cadence DMs always go through Instagram
+      await chrome.tabs.update(tab.id, { url: dmProfileUrl(item.username) });
       await waitForTabLoad(tab.id);
       await delay(3000);
-      await injectContentScript(tab.id);
+      await injectContentScript(tab.id, 'instagram');
       await delay(500);
 
       const profileCheck = await sendToTab(tab.id, { action: 'checkProfileActions' });
@@ -584,7 +642,7 @@ async function processCadenceQueue() {
         if (clickResult && clickResult.error) throw new Error(clickResult.error);
 
         await delay(3000);
-        await injectContentScript(tab.id);
+        await injectContentScript(tab.id, 'instagram');
         await delay(1000);
 
         const typeResult = await sendToTab(tab.id, { action: 'typeAndSendDM', message: personalizedMsg });
@@ -615,7 +673,6 @@ async function processCadenceQueue() {
     await delay(5000);
   }
 
-  // Update queue: keep only pending items
   const updatedQueue = queue.filter(item => item.status === 'pending');
   await chrome.storage.local.set({ cadenceQueue: updatedQueue });
   broadcastCadenceUpdate();
@@ -624,12 +681,12 @@ async function processCadenceQueue() {
 
 
 // ════════════════════════════════════════════════════════════
-//  WAITLIST RE-CHECK
+//  WAITLIST RE-CHECK (multi-platform)
 // ════════════════════════════════════════════════════════════
 
-async function runWaitlistRecheck(waitlist) {
+async function runWaitlistRecheck(waitlist, platform) {
   if (!boState.tabId) {
-    const tab = await getOrCreateIGTab('https://www.instagram.com/');
+    const tab = await getOrCreateTab(platformBaseUrl('instagram'), 'instagram');
     boState.tabId = tab.id;
     await waitForTabLoad(tab.id);
     await delay(2000);
@@ -641,14 +698,16 @@ async function runWaitlistRecheck(waitlist) {
   for (let i = 0; i < waitlist.length; i++) {
     const user = waitlist[i];
     const personalizedMsg = (user.dmTemplate || '').replace(/\{\{username\}\}/gi, user.username);
+    const userPlatform = user.platform || 'instagram';
 
     try {
       broadcastWaitlistProgress(user.username, 'checking', `Checking @${user.username}...`, i, waitlist.length, results);
 
-      await chrome.tabs.update(boState.tabId, { url: `https://www.instagram.com/${user.username}/` });
+      // Always check on Instagram for DM availability
+      await chrome.tabs.update(boState.tabId, { url: dmProfileUrl(user.username) });
       await waitForTabLoad(boState.tabId);
       await delay(3000);
-      await injectContentScript(boState.tabId);
+      await injectContentScript(boState.tabId, 'instagram');
       await delay(500);
 
       const profileCheck = await sendToTab(boState.tabId, { action: 'checkProfileActions' });
@@ -660,7 +719,7 @@ async function runWaitlistRecheck(waitlist) {
         if (clickResult && clickResult.error) throw new Error(clickResult.error);
 
         await delay(3000);
-        await injectContentScript(boState.tabId);
+        await injectContentScript(boState.tabId, 'instagram');
         await delay(1000);
 
         const typeResult = await sendToTab(boState.tabId, { action: 'typeAndSendDM', message: personalizedMsg });
@@ -669,7 +728,6 @@ async function runWaitlistRecheck(waitlist) {
         broadcastWaitlistProgress(user.username, 'dm-sent', `DM sent to @${user.username}!`, i, waitlist.length, results);
         results.push({ username: user.username, status: 'dm-sent' });
 
-        // Update history: mark as messaged
         await saveDMHistory({
           username: user.username,
           status: 'messaged',
@@ -677,7 +735,8 @@ async function runWaitlistRecheck(waitlist) {
           templateName: user.templateName,
           timestamp: Date.now(),
           viewed: true,
-          followed: true
+          followed: true,
+          platform: userPlatform
         });
 
       } else {
@@ -701,11 +760,12 @@ async function runWaitlistRecheck(waitlist) {
 
 
 // ════════════════════════════════════════════════════════════
-//  HELPERS
+//  HELPERS (multi-platform)
 // ════════════════════════════════════════════════════════════
 
-async function getOrCreateIGTab(url) {
-  const tabs = await chrome.tabs.query({ url: 'https://www.instagram.com/*' });
+async function getOrCreateTab(url, platform) {
+  const queryPattern = platformTabQuery(platform);
+  const tabs = await chrome.tabs.query({ url: queryPattern });
   if (tabs.length > 0) {
     await chrome.tabs.update(tabs[0].id, { active: true, url });
     return tabs[0];
@@ -727,8 +787,9 @@ function waitForTabLoad(tabId, timeout = 20000) {
   });
 }
 
-async function injectContentScript(tabId) {
-  try { await chrome.scripting.executeScript({ target: { tabId }, files: ['js/content.js'] }); } catch (e) { console.warn('Inject failed:', e.message); }
+async function injectContentScript(tabId, platform) {
+  const scriptFile = contentScriptFile(platform || 'instagram');
+  try { await chrome.scripting.executeScript({ target: { tabId }, files: [scriptFile] }); } catch (e) { console.warn('Inject failed:', e.message); }
   try { await chrome.scripting.insertCSS({ target: { tabId }, files: ['css/overlay.css'] }); } catch (e) {}
 }
 
@@ -792,10 +853,8 @@ async function saveDMHistory(entry) {
   const data = await chrome.storage.local.get('dmHistory');
   const history = data.dmHistory || [];
 
-  // Check if this user already has a history entry — update it instead of duplicating
   const existingIdx = history.findIndex(h => h.username === entry.username && !h.cadenceStep);
   if (existingIdx >= 0 && !entry.cadenceStep) {
-    // Merge: keep the most advanced status
     const existing = history[existingIdx];
     history[existingIdx] = {
       ...existing,

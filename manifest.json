@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Influencer DM Manager",
-  "version": "5.0.0",
-  "description": "Instagram influencer engagement manager. Bulk outreach with handle lists, DM templates, three-light status tracking, cadence follow-ups, waitlist, and keyword-scan mode.",
+  "version": "6.0.0",
+  "description": "Instagram & Threads influencer engagement manager. Bulk outreach, keyword-scan, DM templates, three-light status tracking, cadence follow-ups, and waitlist.",
   "permissions": [
     "activeTab",
     "storage",
@@ -11,7 +11,9 @@
     "sidePanel"
   ],
   "host_permissions": [
-    "https://www.instagram.com/*"
+    "https://www.instagram.com/*",
+    "https://www.threads.net/*",
+    "https://www.threads.com/*"
   ],
   "action": {
     "default_icon": {
@@ -35,6 +37,12 @@
     {
       "matches": ["https://www.instagram.com/*"],
       "js": ["js/content.js"],
+      "css": ["css/overlay.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.threads.net/*", "https://www.threads.com/*"],
+      "js": ["js/threads-content.js"],
       "css": ["css/overlay.css"],
       "run_at": "document_idle"
     }

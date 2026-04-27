@@ -44,6 +44,69 @@ body {
   box-shadow: 0 2px 12px rgba(0,0,0,0.15);
 }
 
+/* Threads gradient override */
+body.platform-threads .header {
+  background: linear-gradient(135deg, #000000, #333333, #000000);
+}
+
+/* ═══ Platform Selector ═══ */
+.platform-selector {
+  display: flex;
+  gap: 0;
+  padding: 6px 12px;
+  background: #fff;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 52px;
+  z-index: 99;
+}
+
+.platform-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1.5px solid var(--border);
+  background: #fff;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.platform-btn:first-child {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  border-right: none;
+}
+
+.platform-btn:last-child {
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.platform-btn.active[data-platform="instagram"] {
+  background: linear-gradient(135deg, #833ab4, #fd1d1d, #fcb045);
+  color: #fff;
+  border-color: transparent;
+}
+
+.platform-btn.active[data-platform="threads"] {
+  background: #000;
+  color: #fff;
+  border-color: transparent;
+}
+
+.platform-btn:not(.active):hover {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.platform-btn svg {
+  flex-shrink: 0;
+}
+
 .header-brand {
   display: flex;
   align-items: center;

@@ -124,6 +124,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const waitlistStatusText = $('waitlistStatusText');
   const waitlistLiveLog  = $('waitlistLiveLog');
 
+  // ─── DOM refs: Platform Selector ───
+  const platformBtns = document.querySelectorAll('.platform-btn');
+  const postUrlLabel = $('postUrlLabel');
+  const boHandlesLabel = $('boHandlesLabel');
+
   // ─── State ───
   let currentStep = 1;
   let matchedUsers = [];
@@ -133,6 +138,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let boPollTimer = null;
   let editingTemplateIdx = -1;
   let currentHistoryFilter = 'all';
+  let currentPlatform = 'instagram';
 
   const TEMPLATE_COLORS = ['#833ab4', '#fd1d1d', '#fcb045', '#0095f6', '#2ecc71', '#e74c3c', '#9b59b6', '#1abc9c'];
 
@@ -145,6 +151,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   await refreshHistory();
   await refreshCadenceQueue();
   setupCadenceToggles();
+  setupPlatformSelector();
 
   // ─── Listen for real-time progress from background ───
   chrome.runtime.onMessage.addListener((msg) => {
@@ -155,6 +162,31 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (msg.action === 'cadenceUpdate') refreshCadenceQueue();
     if (msg.action === 'historyUpdate') refreshHistory();
   });
+
+
+  // ═══════════════════════════════════════════
+  //  PLATFORM SELECTOR
+  // ═══════════════════════════════════════════
+
+  function setupPlatformSelector() {
+    platformBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        currentPlatform = btn.dataset.platform;
+        platformBtns.forEach(b => b.classList.toggle('active', b === btn));
+        document.body.className = `platform-${currentPlatform}`;
+        updatePlatformLabels();
+      });
+    });
+    updatePlatformLabels();
+  }
+
+  function updatePlatformLabels() {
+    const isThreads = currentPlatform === 'threads';
+    if (postUrlLabel) postUrlLabel.textContent = isThreads ? 'Threads Post URL' : 'Instagram Post URL';
+    if (postUrlInput) postUrlInput.placeholder = isThreads ? 'https://www.threads.net/@user/post/...' : 'https://www.instagram.com/p/...';
+    if (boHandlesLabel) boHandlesLabel.textContent = isThreads ? 'Threads Handles' : 'Instagram Handles';
+    if (boHandlesInput) boHandlesInput.placeholder = isThreads ? '@handle1\n@handle2\n@handle3' : '@handle1\n@handle2\n@handle3';
+  }
 
 
   // ═══════════════════════════════════════════
@@ -207,7 +239,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     const dmTemplate = dmTemplateInput.value.trim();
     const delaySec = parseInt(delayInput.value) || 30;
 
-    if (!postUrl || !postUrl.includes('instagram.com/')) return flash(postUrlInput);
+    const validUrl = currentPlatform === 'threads'
+      ? (postUrl.includes('threads.net/') || postUrl.includes('threads.com/'))
+      : postUrl.includes('instagram.com/');
+    if (!postUrl || !validUrl) return flash(postUrlInput);
     if (!keywords.length) return flash(keywordsInput);
     if (!dmTemplate) return flash(dmTemplateInput);
 
@@ -221,7 +256,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const isAutoSend = autoSendToggle.checked;
 
     try {
-      const result = await bg({ action: 'startScan', postUrl, keywords, dmTemplate, delaySeconds: delaySec, autoSend: isAutoSend });
+      const result = await bg({ action: 'startScan', postUrl, keywords, dmTemplate, delaySeconds: delaySec, autoSend: isAutoSend, platform: currentPlatform });
       if (result.matchedUsers) {
         matchedUsers = result.matchedUsers;
         scanProgressBar.style.width = '100%';
@@ -767,7 +802,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Scroll to progress card
     boProgress.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-    await bg({ action: 'startBulkOutreach', outreachList, delaySeconds: delaySec, cadenceConfig });
+    await bg({ action: 'startBulkOutreach', outreachList, delaySeconds: delaySec, cadenceConfig, platform: currentPlatform });
     startBOPolling(outreachList);
   });
 
@@ -1122,7 +1157,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     waitlistLiveLog.innerHTML = '';
     waitlistProgressBar.style.width = '0%';
     waitlistStatusText.textContent = `Re-checking: 0 / ${waitlist.length}`;
-    await bg({ action: 'recheckWaitlist' });
+    await bg({ action: 'recheckWaitlist', platform: currentPlatform });
   });
 
   function handleWaitlistCheckUpdate(msg) {
