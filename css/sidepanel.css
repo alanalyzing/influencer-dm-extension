@@ -345,7 +345,17 @@ body.platform-threads .header {
   font-size: 11px;
   color: var(--text-muted);
   margin-top: 3px;
-  display: block;
+}
+
+.delay-warning {
+  font-size: 11px;
+  color: var(--error);
+  font-weight: 600;
+  margin-top: 4px;
+  padding: 4px 8px;
+  background: var(--error-light);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--error);
 }
 
 /* ═══ Buttons ═══ */

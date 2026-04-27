@@ -20,7 +20,7 @@ let state = {
   postUrl: '',
   keywords: [],
   dmTemplate: '',
-  delaySeconds: 30,
+  delaySeconds: 60,
   matchedUsers: [],
   selectedUsers: [],
   sentLog: [],
@@ -36,7 +36,7 @@ let state = {
 let boState = {
   status: 'idle',
   outreachList: [],
-  delaySeconds: 30,
+  delaySeconds: 60,
   sentLog: [],
   currentIndex: 0,
   tabId: null,
@@ -107,7 +107,7 @@ const handlers = {
     state.postUrl = msg.postUrl;
     state.keywords = msg.keywords;
     state.dmTemplate = msg.dmTemplate;
-    state.delaySeconds = msg.delaySeconds || 30;
+    state.delaySeconds = msg.delaySeconds || 60;
     state.platform = msg.platform || 'instagram';
     state.status = 'scanning';
     state.matchedUsers = [];
@@ -183,7 +183,7 @@ const handlers = {
 
   startBulkOutreach: async (msg) => {
     boState.outreachList = msg.outreachList;
-    boState.delaySeconds = msg.delaySeconds || 30;
+    boState.delaySeconds = msg.delaySeconds || 60;
     boState.cadenceConfig = msg.cadenceConfig || null;
     boState.platform = msg.platform || 'instagram';
     boState.status = 'sending';

@@ -237,7 +237,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const postUrl = postUrlInput.value.trim();
     const keywords = keywordsInput.value.split(',').map(k => k.trim()).filter(Boolean);
     const dmTemplate = dmTemplateInput.value.trim();
-    const delaySec = parseInt(delayInput.value) || 30;
+    const delaySec = parseInt(delayInput.value) || 60;
 
     const validUrl = currentPlatform === 'threads'
       ? (postUrl.includes('threads.net/') || postUrl.includes('threads.com/'))
@@ -781,7 +781,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       };
     });
 
-    const delaySec = parseInt(boDelayInput.value) || 30;
+    const delaySec = parseInt(boDelayInput.value) || 60;
     const cadenceConfig = getCadenceConfig();
 
     // Show progress
@@ -1226,7 +1226,20 @@ document.addEventListener('DOMContentLoaded', async () => {
         autoSendToggle.checked = false;
       }
     } catch (e) {}
+    // Trigger initial warning check
+    checkDelayWarning(delayInput, $('delayWarning'));
+    checkDelayWarning(boDelayInput, $('boDelayWarning'));
   }
+
+  // ─── Delay Warning Logic ───
+  function checkDelayWarning(input, warningEl) {
+    if (!input || !warningEl) return;
+    const val = parseInt(input.value);
+    warningEl.style.display = (val && val < 60) ? 'block' : 'none';
+  }
+
+  delayInput.addEventListener('input', () => checkDelayWarning(delayInput, $('delayWarning')));
+  boDelayInput.addEventListener('input', () => checkDelayWarning(boDelayInput, $('boDelayWarning')));
 
 
   // ═══════════════════════════════════════════

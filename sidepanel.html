@@ -111,7 +111,8 @@
             </div>
             <div class="field field-half">
               <label for="boDelay">Delay (sec)</label>
-              <input id="boDelay" type="number" min="10" max="120" value="30" />
+              <input id="boDelay" type="number" min="10" max="300" value="60" />
+              <span id="boDelayWarning" class="delay-warning" style="display:none">Below 60s risks rate limiting or account ban.</span>
             </div>
           </div>
 
@@ -299,7 +300,8 @@
           <div class="field-row">
             <div class="field field-half">
               <label for="delaySeconds">Delay (sec)</label>
-              <input id="delaySeconds" type="number" min="10" max="120" value="30" />
+              <input id="delaySeconds" type="number" min="10" max="300" value="60" />
+              <span id="delayWarning" class="delay-warning" style="display:none">Below 60s risks rate limiting or account ban.</span>
             </div>
             <div class="field field-half toggle-field">
               <label class="toggle-label">
