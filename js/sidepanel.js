@@ -521,28 +521,74 @@ document.addEventListener('DOMContentLoaded', async () => {
     populateTemplateDropdowns();
   }
 
+  let editingTemplateIdx = -1; // Track which template is being edited
+
   function renderTemplates() {
     if (!templates.length) {
       templatesList.innerHTML = '<div class="empty-state">No templates yet. Add one below.</div>';
       return;
     }
     templatesList.innerHTML = templates.map((t, i) => `
-      <div class="template-item">
+      <div class="template-item${editingTemplateIdx === i ? ' editing' : ''}" data-idx="${i}">
         <div class="template-color" style="background:${t.color}"></div>
         <div class="template-body">
-          <div class="template-name">${escHtml(t.name)}</div>
-          <div class="template-preview">${escHtml(t.body.substring(0, 80))}${t.body.length > 80 ? '...' : ''}</div>
+          ${editingTemplateIdx === i ? `
+            <input class="template-edit-name" type="text" value="${escHtml(t.name)}" />
+            <textarea class="template-edit-body" rows="3">${escHtml(t.body)}</textarea>
+            <div class="template-edit-actions">
+              <button class="btn btn-sm btn-primary template-save-btn" data-idx="${i}">Save</button>
+              <button class="btn btn-sm btn-secondary template-cancel-btn" data-idx="${i}">Cancel</button>
+            </div>
+          ` : `
+            <div class="template-name">${escHtml(t.name)}</div>
+            <div class="template-preview">${escHtml(t.body.substring(0, 80))}${t.body.length > 80 ? '...' : ''}</div>
+          `}
         </div>
+        ${editingTemplateIdx !== i ? `
         <div class="template-actions">
+          <button class="template-btn edit" data-idx="${i}" title="Edit">&#x270E;</button>
           <button class="template-btn delete" data-idx="${i}" title="Delete">&#x2715;</button>
-        </div>
+        </div>` : ''}
       </div>
     `).join('');
 
+    // Wire up edit buttons
+    templatesList.querySelectorAll('.template-btn.edit').forEach(btn => {
+      btn.addEventListener('click', () => {
+        editingTemplateIdx = parseInt(btn.dataset.idx);
+        renderTemplates();
+      });
+    });
+
+    // Wire up delete buttons
     templatesList.querySelectorAll('.template-btn.delete').forEach(btn => {
       btn.addEventListener('click', async () => {
         templates.splice(parseInt(btn.dataset.idx), 1);
+        editingTemplateIdx = -1;
         await saveTemplates();
+      });
+    });
+
+    // Wire up save buttons (inline edit)
+    templatesList.querySelectorAll('.template-save-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const idx = parseInt(btn.dataset.idx);
+        const item = btn.closest('.template-item');
+        const newName = item.querySelector('.template-edit-name').value.trim();
+        const newBody = item.querySelector('.template-edit-body').value.trim();
+        if (!newName || !newBody) return;
+        templates[idx].name = newName;
+        templates[idx].body = newBody;
+        editingTemplateIdx = -1;
+        await saveTemplates();
+      });
+    });
+
+    // Wire up cancel buttons (inline edit)
+    templatesList.querySelectorAll('.template-cancel-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        editingTemplateIdx = -1;
+        renderTemplates();
       });
     });
   }
@@ -584,23 +630,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   //  BULK OUTREACH: HANDLE LIST & RUN
   // ═══════════════════════════════════════════════════════════════
 
-  btnParseHandles.addEventListener('click', () => {
-    const raw = boHandlesInput.value.trim();
-    if (!raw) return flash(boHandlesInput);
-    if (!templates.length) {
-      flash(newTemplateName);
-      // Switch to templates tab
-      subTabs.forEach(t => t.classList.toggle('active', t.dataset.subtab === 'bo-templates'));
-      Object.entries(subPanels).forEach(([k, v]) => v.classList.toggle('active', k === 'bo-templates'));
-      return;
-    }
-
-    const defaultTplId = boDefaultTemplate.value || templates[0]?.id || '';
-    const handles = raw.split('\n').map(h => h.trim().replace(/^@/, '')).filter(Boolean);
-    const unique = [...new Set(handles)];
-
-    parsedHandles = unique.map(username => ({ username, templateId: defaultTplId }));
-
+  function renderHandleList() {
     boHandleCount.textContent = `${parsedHandles.length} handles`;
     boHandleList.innerHTML = parsedHandles.map((h, i) => `
       <div class="handle-row" data-idx="${i}">
@@ -624,9 +654,33 @@ document.addEventListener('DOMContentLoaded', async () => {
     boHandleList.querySelectorAll('.handle-remove').forEach(btn => {
       btn.addEventListener('click', () => {
         parsedHandles.splice(parseInt(btn.dataset.idx), 1);
-        btnParseHandles.click(); // Re-render
+        if (parsedHandles.length === 0) {
+          boHandleAssignments.style.display = 'none';
+          btnStartOutreach.style.display = 'none';
+          return;
+        }
+        renderHandleList();
       });
     });
+  }
+
+  btnParseHandles.addEventListener('click', () => {
+    const raw = boHandlesInput.value.trim();
+    if (!raw) return flash(boHandlesInput);
+    if (!templates.length) {
+      flash(newTemplateName);
+      // Switch to templates tab
+      subTabs.forEach(t => t.classList.toggle('active', t.dataset.subtab === 'bo-templates'));
+      Object.entries(subPanels).forEach(([k, v]) => v.classList.toggle('active', k === 'bo-templates'));
+      return;
+    }
+
+    const defaultTplId = boDefaultTemplate.value || templates[0]?.id || '';
+    const handles = raw.split('\n').map(h => h.trim().replace(/^@/, '')).filter(Boolean);
+    const unique = [...new Set(handles)];
+
+    parsedHandles = unique.map(username => ({ username, templateId: defaultTplId }));
+    renderHandleList();
 
     boHandleAssignments.style.display = 'block';
     btnStartOutreach.style.display = 'flex';
