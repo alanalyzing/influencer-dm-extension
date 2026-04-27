@@ -16,124 +16,264 @@
     </div>
   </header>
 
-  <!-- ═══ Step Indicator ═══ -->
-  <div class="steps-bar">
-    <div class="step-dot active" data-step="1"><span>1</span><label>Configure</label></div>
-    <div class="step-line"></div>
-    <div class="step-dot" data-step="2"><span>2</span><label>Scan</label></div>
-    <div class="step-line"></div>
-    <div class="step-dot" data-step="3"><span>3</span><label>Review</label></div>
-    <div class="step-line"></div>
-    <div class="step-dot" data-step="4"><span>4</span><label>Send</label></div>
+  <!-- ═══ Mode Tabs ═══ -->
+  <div class="mode-tabs">
+    <button class="mode-tab active" data-mode="keyword">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      Keyword Scan
+    </button>
+    <button class="mode-tab" data-mode="outreach">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      Bulk Outreach
+    </button>
   </div>
 
-  <!-- ═══ STEP 1: Configure ═══ -->
-  <section id="step1" class="step-panel active">
-    <div class="card">
-      <h2>Campaign Setup</h2>
-      <div class="field">
-        <label for="postUrl">Instagram Post URL</label>
-        <input id="postUrl" type="url" placeholder="https://www.instagram.com/p/..." />
-      </div>
-      <div class="field">
-        <label for="keywords">Keywords to Match</label>
-        <input id="keywords" type="text" placeholder="photo, photos" />
-        <span class="hint">Comma-separated. Case-insensitive matching.</span>
-      </div>
-      <div class="field">
-        <label for="dmTemplate">DM Template</label>
-        <textarea id="dmTemplate" rows="4" placeholder="Hi {{username}}, thanks for your interest!&#10;We'd love to work with you..."></textarea>
-        <span class="hint">Use {{username}} for personalization.</span>
-      </div>
-      <div class="field">
-        <label for="delaySeconds">Delay Between DMs (seconds)</label>
-        <input id="delaySeconds" type="number" min="10" max="120" value="30" />
-      </div>
-      <div class="field toggle-field">
-        <label class="toggle-label">
-          <input id="autoSend" type="checkbox" class="toggle-input" />
-          <span class="toggle-switch"></span>
-          <span class="toggle-text">Full Automation</span>
-        </label>
-        <span class="hint">Skip review step — scan and send DMs automatically to all matched users.</span>
-      </div>
-      <button id="btnStartScan" class="btn btn-primary btn-full">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-        Start Scanning
-      </button>
-    </div>
-  </section>
+  <!-- ╔══════════════════════════════════════════╗ -->
+  <!-- ║  MODE 1: KEYWORD SCAN (existing)         ║ -->
+  <!-- ╚══════════════════════════════════════════╝ -->
+  <div id="modeKeyword" class="mode-panel active">
 
-  <!-- ═══ STEP 2: Scanning ═══ -->
-  <section id="step2" class="step-panel">
-    <div class="card">
-      <h2>Scanning Comments</h2>
-      <div class="progress-bar"><div id="scanProgressBar" class="progress-fill"></div></div>
-      <div id="scanLiveLog" class="live-log"></div>
-      <button id="btnCancelScan" class="btn btn-secondary btn-full">Cancel</button>
+    <!-- Step Indicator -->
+    <div class="steps-bar">
+      <div class="step-dot active" data-step="1"><span>1</span><label>Configure</label></div>
+      <div class="step-line"></div>
+      <div class="step-dot" data-step="2"><span>2</span><label>Scan</label></div>
+      <div class="step-line"></div>
+      <div class="step-dot" data-step="3"><span>3</span><label>Review</label></div>
+      <div class="step-line"></div>
+      <div class="step-dot" data-step="4"><span>4</span><label>Send</label></div>
     </div>
-  </section>
 
-  <!-- ═══ STEP 3: Review ═══ -->
-  <section id="step3" class="step-panel">
-    <div class="card">
-      <h2>Matched Commenters</h2>
-      <p id="matchSummary" class="summary-text"></p>
-      <div class="toolbar">
-        <button id="btnSelectAll" class="btn btn-sm">Select All</button>
-        <button id="btnDeselectAll" class="btn btn-sm">Deselect All</button>
-        <span id="selectedCount" class="badge">0 selected</span>
+    <!-- STEP 1: Configure -->
+    <section id="step1" class="step-panel active">
+      <div class="card">
+        <h2>Campaign Setup</h2>
+        <div class="field">
+          <label for="postUrl">Instagram Post URL</label>
+          <input id="postUrl" type="url" placeholder="https://www.instagram.com/p/..." />
+        </div>
+        <div class="field">
+          <label for="keywords">Keywords to Match</label>
+          <input id="keywords" type="text" placeholder="photo, photos" />
+          <span class="hint">Comma-separated. Case-insensitive matching.</span>
+        </div>
+        <div class="field">
+          <label for="dmTemplate">DM Template</label>
+          <textarea id="dmTemplate" rows="4" placeholder="Hi {{username}}, thanks for your interest!&#10;We'd love to work with you..."></textarea>
+          <span class="hint">Use {{username}} for personalization.</span>
+        </div>
+        <div class="field">
+          <label for="delaySeconds">Delay Between DMs (seconds)</label>
+          <input id="delaySeconds" type="number" min="10" max="120" value="30" />
+        </div>
+        <div class="field toggle-field">
+          <label class="toggle-label">
+            <input id="autoSend" type="checkbox" class="toggle-input" />
+            <span class="toggle-switch"></span>
+            <span class="toggle-text">Full Automation</span>
+          </label>
+          <span class="hint">Skip review step — scan and send DMs automatically to all matched users.</span>
+        </div>
+        <button id="btnStartScan" class="btn btn-primary btn-full">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          Start Scanning
+        </button>
       </div>
-      <div id="matchedList" class="matched-list"></div>
-      <div class="field" style="margin-top:12px">
-        <label>DM Preview</label>
-        <div id="dmPreview" class="dm-preview"></div>
-      </div>
-      <div class="btn-row">
-        <button id="btnBackToConfig" class="btn btn-secondary">Back</button>
-        <button id="btnStartDMs" class="btn btn-primary" disabled>Send DMs</button>
-      </div>
-    </div>
-  </section>
+    </section>
 
-  <!-- ═══ STEP 4: Sending DMs ═══ -->
-  <section id="step4" class="step-panel">
-    <div class="card">
-      <h2>Sending DMs</h2>
-      <div class="progress-bar"><div id="dmProgressBar" class="progress-fill"></div></div>
-      <p id="dmStatusText" class="summary-text">Preparing...</p>
-      <div id="dmLiveLog" class="live-log"></div>
-      <div id="dmActiveActions" class="btn-row">
-        <button id="btnPauseDMs" class="btn btn-secondary">Pause</button>
-        <button id="btnBackToConfigFromDM" class="btn btn-secondary" style="display:none">Back to Config</button>
+    <!-- STEP 2: Scanning -->
+    <section id="step2" class="step-panel">
+      <div class="card">
+        <h2>Scanning Comments</h2>
+        <div class="progress-bar"><div id="scanProgressBar" class="progress-fill"></div></div>
+        <div id="scanLiveLog" class="live-log"></div>
+        <button id="btnCancelScan" class="btn btn-secondary btn-full">Cancel</button>
       </div>
-      <div id="dmDoneActions" class="btn-row" style="display:none">
-        <button id="btnNewCampaign" class="btn btn-primary btn-full">+ New Campaign</button>
-      </div>
-    </div>
-  </section>
+    </section>
 
-  <!-- ═══ Pending Follows (Plan B) ═══ -->
-  <section id="pendingSection" class="pending-section" style="display:none">
-    <div class="card">
-      <div class="pending-header" id="pendingToggle">
-        <h2>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
-          Pending Follows
-          <span id="pendingBadge" class="pending-badge">0</span>
-        </h2>
-        <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-      </div>
-      <div id="pendingBody" class="pending-body" style="display:none">
-        <p class="hint" style="margin-bottom:8px">These users had no Message button. They were followed instead. Retry once they follow you back.</p>
-        <div id="pendingList" class="matched-list"></div>
-        <div class="btn-row" style="margin-top:8px">
-          <button id="btnRetryPending" class="btn btn-primary">Retry DMs</button>
-          <button id="btnClearPending" class="btn btn-secondary">Clear</button>
+    <!-- STEP 3: Review -->
+    <section id="step3" class="step-panel">
+      <div class="card">
+        <h2>Matched Commenters</h2>
+        <p id="matchSummary" class="summary-text"></p>
+        <div class="toolbar">
+          <button id="btnSelectAll" class="btn btn-sm">Select All</button>
+          <button id="btnDeselectAll" class="btn btn-sm">Deselect All</button>
+          <span id="selectedCount" class="badge">0 selected</span>
+        </div>
+        <div id="matchedList" class="matched-list"></div>
+        <div class="field" style="margin-top:12px">
+          <label>DM Preview</label>
+          <div id="dmPreview" class="dm-preview"></div>
+        </div>
+        <div class="btn-row">
+          <button id="btnBackToConfig" class="btn btn-secondary">Back</button>
+          <button id="btnStartDMs" class="btn btn-primary" disabled>Send DMs</button>
         </div>
       </div>
+    </section>
+
+    <!-- STEP 4: Sending DMs -->
+    <section id="step4" class="step-panel">
+      <div class="card">
+        <h2>Sending DMs</h2>
+        <div class="progress-bar"><div id="dmProgressBar" class="progress-fill"></div></div>
+        <p id="dmStatusText" class="summary-text">Preparing...</p>
+        <div id="dmLiveLog" class="live-log"></div>
+        <div id="dmActiveActions" class="btn-row">
+          <button id="btnPauseDMs" class="btn btn-secondary">Pause</button>
+          <button id="btnBackToConfigFromDM" class="btn btn-secondary" style="display:none">Back to Config</button>
+        </div>
+        <div id="dmDoneActions" class="btn-row" style="display:none">
+          <button id="btnNewCampaign" class="btn btn-primary btn-full">+ New Campaign</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Pending Follows (Plan B) -->
+    <section id="pendingSection" class="pending-section" style="display:none">
+      <div class="card">
+        <div class="pending-header" id="pendingToggle">
+          <h2>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
+            Pending Follows
+            <span id="pendingBadge" class="pending-badge">0</span>
+          </h2>
+          <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div id="pendingBody" class="pending-body" style="display:none">
+          <p class="hint" style="margin-bottom:8px">These users had no Message button. They were followed instead. Retry once they follow you back.</p>
+          <div id="pendingList" class="matched-list"></div>
+          <div class="btn-row" style="margin-top:8px">
+            <button id="btnRetryPending" class="btn btn-primary">Retry DMs</button>
+            <button id="btnClearPending" class="btn btn-secondary">Clear</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </div><!-- /modeKeyword -->
+
+
+  <!-- ╔══════════════════════════════════════════╗ -->
+  <!-- ║  MODE 2: BULK OUTREACH (new)              ║ -->
+  <!-- ╚══════════════════════════════════════════╝ -->
+  <div id="modeOutreach" class="mode-panel">
+
+    <!-- Sub-tabs: Templates | Outreach | Waitlist -->
+    <div class="sub-tabs">
+      <button class="sub-tab active" data-subtab="bo-templates">Templates</button>
+      <button class="sub-tab" data-subtab="bo-outreach">Outreach</button>
+      <button class="sub-tab" data-subtab="bo-waitlist">
+        Waitlist
+        <span id="waitlistBadge" class="waitlist-badge" style="display:none">0</span>
+      </button>
     </div>
-  </section>
+
+    <!-- ─── Sub-tab 1: Reply Directions (Templates) ─── -->
+    <section id="bo-templates" class="sub-panel active">
+      <div class="card">
+        <h2>Reply Directions</h2>
+        <p class="hint" style="margin-bottom:10px">Pre-configure DM templates. Assign one to each handle during outreach. Use {{username}} for personalization.</p>
+
+        <div id="templatesList" class="templates-list"></div>
+
+        <div class="template-add-form">
+          <div class="field">
+            <label for="newTemplateName">Template Name</label>
+            <input id="newTemplateName" type="text" placeholder="e.g., Collaboration Invite" />
+          </div>
+          <div class="field">
+            <label for="newTemplateBody">Message</label>
+            <textarea id="newTemplateBody" rows="3" placeholder="Hi {{username}}, we'd love to collaborate with you on..."></textarea>
+          </div>
+          <button id="btnAddTemplate" class="btn btn-primary btn-full">+ Add Template</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Sub-tab 2: Outreach (Handle List + Run) ─── -->
+    <section id="bo-outreach" class="sub-panel">
+      <div class="card">
+        <h2>Bulk Outreach</h2>
+        <p class="hint" style="margin-bottom:10px">Paste Instagram handles (one per line). Assign a template to each, then run.</p>
+
+        <div class="field">
+          <label for="boHandles">Instagram Handles</label>
+          <textarea id="boHandles" rows="5" placeholder="username1&#10;username2&#10;username3"></textarea>
+          <span class="hint">One handle per line. No @ needed.</span>
+        </div>
+
+        <div class="field">
+          <label for="boDefaultTemplate">Default Template</label>
+          <select id="boDefaultTemplate">
+            <option value="">— Select a template —</option>
+          </select>
+        </div>
+
+        <button id="btnParseHandles" class="btn btn-secondary btn-full">Parse &amp; Assign Templates</button>
+
+        <!-- Per-handle template assignment (shown after parse) -->
+        <div id="boHandleAssignments" class="handle-assignments" style="display:none">
+          <div class="toolbar" style="margin-top:12px">
+            <span id="boHandleCount" class="badge">0 handles</span>
+          </div>
+          <div id="boHandleList" class="handle-list"></div>
+        </div>
+
+        <div class="field" style="margin-top:12px">
+          <label for="boDelay">Delay Between Actions (seconds)</label>
+          <input id="boDelay" type="number" min="10" max="120" value="30" />
+        </div>
+
+        <button id="btnStartOutreach" class="btn btn-primary btn-full" style="display:none">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+          Start Outreach
+        </button>
+      </div>
+
+      <!-- Outreach Progress (shown during run) -->
+      <div id="boProgress" class="card" style="display:none; margin-top:12px">
+        <h2>Outreach Progress</h2>
+        <div class="progress-bar"><div id="boProgressBar" class="progress-fill"></div></div>
+        <p id="boStatusText" class="summary-text">Preparing...</p>
+        <div id="boLiveLog" class="live-log"></div>
+        <div id="boActiveActions" class="btn-row">
+          <button id="btnPauseOutreach" class="btn btn-secondary">Pause</button>
+          <button id="btnBackFromOutreach" class="btn btn-secondary" style="display:none">Back</button>
+        </div>
+        <div id="boDoneActions" class="btn-row" style="display:none">
+          <button id="btnNewOutreach" class="btn btn-primary btn-full">+ New Outreach</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Sub-tab 3: Waitlist ─── -->
+    <section id="bo-waitlist" class="sub-panel">
+      <div class="card">
+        <h2>
+          Waitlist
+          <span id="waitlistCount" class="pending-badge" style="margin-left:6px">0</span>
+        </h2>
+        <p class="hint" style="margin-bottom:10px">Users who received a follow request but haven't accepted yet. Re-check to see if they've accepted and send DMs.</p>
+
+        <div id="waitlistList" class="matched-list"></div>
+
+        <div class="btn-row" style="margin-top:10px">
+          <button id="btnRecheckWaitlist" class="btn btn-primary">Re-check &amp; Send DMs</button>
+          <button id="btnClearWaitlist" class="btn btn-secondary">Clear All</button>
+        </div>
+
+        <!-- Re-check Progress -->
+        <div id="waitlistProgress" class="card" style="display:none; margin-top:12px">
+          <div class="progress-bar"><div id="waitlistProgressBar" class="progress-fill"></div></div>
+          <p id="waitlistStatusText" class="summary-text"></p>
+          <div id="waitlistLiveLog" class="live-log"></div>
+        </div>
+      </div>
+    </section>
+
+  </div><!-- /modeOutreach -->
 
   <script src="js/sidepanel.js"></script>
 </body>

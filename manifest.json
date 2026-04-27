@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Influencer DM Manager",
-  "version": "3.0.0",
-  "description": "Scan Instagram post comments for keywords and auto-DM matching commenters via their profile.",
+  "version": "4.0.0",
+  "description": "Scan Instagram post comments for keywords and auto-DM matching commenters. Bulk outreach with handle lists, template management, and follow-back waitlist.",
   "permissions": [
     "activeTab",
     "storage",

@@ -1,8 +1,9 @@
 /**
- * Side Panel Controller (v3)
+ * Side Panel Controller (v4)
  *
- * Drives the 4-step UI and listens for real-time progress updates
- * from the background service worker.
+ * Two modes:
+ *   1. Keyword Scan — scan post comments for keywords, send DMs
+ *   2. Bulk Outreach — provide handle list, connect/follow, send DMs with templates
  *
  * Progress granularity for DM sending:
  *   Per user: navigating → clickingMessage → waitingDM → typing → sending → done/error
@@ -10,11 +11,14 @@
 
 document.addEventListener('DOMContentLoaded', async () => {
 
-  // ─── DOM refs ───
+  // ─── DOM refs: Mode Tabs ───
+  const modeTabs = document.querySelectorAll('.mode-tab');
+  const modePanels = { keyword: $('modeKeyword'), outreach: $('modeOutreach') };
+
+  // ─── DOM refs: Keyword Scan (existing) ───
   const steps = { 1: $('step1'), 2: $('step2'), 3: $('step3'), 4: $('step4') };
   const stepDots = document.querySelectorAll('.step-dot');
 
-  // Step 1
   const postUrlInput     = $('postUrl');
   const keywordsInput    = $('keywords');
   const dmTemplateInput  = $('dmTemplate');
@@ -22,12 +26,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   const autoSendToggle   = $('autoSend');
   const btnStartScan     = $('btnStartScan');
 
-  // Step 2
   const scanProgressBar  = $('scanProgressBar');
   const scanLiveLog      = $('scanLiveLog');
   const btnCancelScan    = $('btnCancelScan');
 
-  // Step 3
   const matchSummary     = $('matchSummary');
   const matchedList      = $('matchedList');
   const btnSelectAll     = $('btnSelectAll');
@@ -37,7 +39,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnBackToConfig  = $('btnBackToConfig');
   const btnStartDMs      = $('btnStartDMs');
 
-  // Step 4
   const dmProgressBar    = $('dmProgressBar');
   const dmStatusText     = $('dmStatusText');
   const dmLiveLog        = $('dmLiveLog');
@@ -47,7 +48,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnBackToConfigDM = $('btnBackToConfigFromDM');
   const btnNewCampaign   = $('btnNewCampaign');
 
-  // Pending Follows (Plan B)
   const pendingSection   = $('pendingSection');
   const pendingToggle    = $('pendingToggle');
   const pendingBody      = $('pendingBody');
@@ -56,28 +56,98 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnRetryPending  = $('btnRetryPending');
   const btnClearPending  = $('btnClearPending');
 
+  // ─── DOM refs: Bulk Outreach ───
+  const subTabs          = document.querySelectorAll('.sub-tab');
+  const subPanels        = { 'bo-templates': $('bo-templates'), 'bo-outreach': $('bo-outreach'), 'bo-waitlist': $('bo-waitlist') };
+
+  // Templates
+  const templatesList    = $('templatesList');
+  const newTemplateName  = $('newTemplateName');
+  const newTemplateBody  = $('newTemplateBody');
+  const btnAddTemplate   = $('btnAddTemplate');
+
+  // Outreach
+  const boHandlesInput   = $('boHandles');
+  const boDefaultTemplate = $('boDefaultTemplate');
+  const btnParseHandles  = $('btnParseHandles');
+  const boHandleAssignments = $('boHandleAssignments');
+  const boHandleCount    = $('boHandleCount');
+  const boHandleList     = $('boHandleList');
+  const boDelayInput     = $('boDelay');
+  const btnStartOutreach = $('btnStartOutreach');
+
+  const boProgress       = $('boProgress');
+  const boProgressBar    = $('boProgressBar');
+  const boStatusText     = $('boStatusText');
+  const boLiveLog        = $('boLiveLog');
+  const boActiveActions  = $('boActiveActions');
+  const boDoneActions    = $('boDoneActions');
+  const btnPauseOutreach = $('btnPauseOutreach');
+  const btnBackFromOutreach = $('btnBackFromOutreach');
+  const btnNewOutreach   = $('btnNewOutreach');
+
+  // Waitlist
+  const waitlistBadge    = $('waitlistBadge');
+  const waitlistCount    = $('waitlistCount');
+  const waitlistList     = $('waitlistList');
+  const btnRecheckWaitlist = $('btnRecheckWaitlist');
+  const btnClearWaitlist = $('btnClearWaitlist');
+  const waitlistProgress = $('waitlistProgress');
+  const waitlistProgressBar = $('waitlistProgressBar');
+  const waitlistStatusText = $('waitlistStatusText');
+  const waitlistLiveLog  = $('waitlistLiveLog');
+
   // ─── State ───
   let currentStep = 1;
   let matchedUsers = [];
   let pollTimer = null;
+  let templates = [];         // { id, name, body, color }
+  let parsedHandles = [];     // { username, templateId }
+  let boPollTimer = null;
+
+  const TEMPLATE_COLORS = ['#833ab4', '#fd1d1d', '#fcb045', '#0095f6', '#2ecc71', '#e74c3c', '#9b59b6', '#1abc9c'];
 
   // ─── Init ───
+  await loadTemplates();
   await loadLastConfig();
   await restoreState();
   await refreshPendingFollows();
+  await refreshWaitlist();
 
   // ─── Listen for real-time progress from background ───
   chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.action === 'progressUpdate') {
-      handleProgressUpdate(msg);
-    }
-    if (msg.action === 'dmProgressUpdate') {
-      handleDMProgressUpdate(msg);
-    }
+    if (msg.action === 'progressUpdate') handleProgressUpdate(msg);
+    if (msg.action === 'dmProgressUpdate') handleDMProgressUpdate(msg);
+    if (msg.action === 'boProgressUpdate') handleBOProgressUpdate(msg);
+    if (msg.action === 'waitlistCheckUpdate') handleWaitlistCheckUpdate(msg);
   });
 
+
   // ═══════════════════════════════════════════
-  //  STEP NAVIGATION
+  //  MODE TAB SWITCHING
+  // ═══════════════════════════════════════════
+
+  modeTabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      const mode = tab.dataset.mode;
+      modeTabs.forEach(t => t.classList.toggle('active', t === tab));
+      Object.entries(modePanels).forEach(([k, v]) => v.classList.toggle('active', k === mode));
+    });
+  });
+
+  // Sub-tab switching (Bulk Outreach)
+  subTabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      const id = tab.dataset.subtab;
+      subTabs.forEach(t => t.classList.toggle('active', t === tab));
+      Object.entries(subPanels).forEach(([k, v]) => v.classList.toggle('active', k === id));
+      if (id === 'bo-waitlist') refreshWaitlist();
+    });
+  });
+
+
+  // ═══════════════════════════════════════════
+  //  KEYWORD SCAN: STEP NAVIGATION
   // ═══════════════════════════════════════════
 
   function goToStep(n) {
@@ -92,7 +162,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // ═══════════════════════════════════════════
-  //  STEP 1: CONFIGURE
+  //  KEYWORD SCAN: STEP 1 CONFIGURE
   // ═══════════════════════════════════════════
 
   btnStartScan.addEventListener('click', async () => {
@@ -107,27 +177,21 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     btnStartScan.disabled = true;
     btnStartScan.textContent = 'Starting...';
-
-    // Clear scan log
     scanLiveLog.innerHTML = '';
     scanProgressBar.style.width = '10%';
     addScanLog('Initializing scan...', 'info');
-
     goToStep(2);
 
     const isAutoSend = autoSendToggle.checked;
 
     try {
       const result = await bg({ action: 'startScan', postUrl, keywords, dmTemplate, delaySeconds: delaySec, autoSend: isAutoSend });
-
       if (result.matchedUsers) {
         matchedUsers = result.matchedUsers;
         scanProgressBar.style.width = '100%';
         addScanLog(`Scan complete! Found ${matchedUsers.length} matching commenters.`, 'success');
         await sleep(600);
-
         if (isAutoSend && matchedUsers.length > 0) {
-          // Full automation: skip review, go straight to sending
           addScanLog('Full Automation enabled — sending DMs to all matched users...', 'info');
           await sleep(400);
           await startDMsForUsers(matchedUsers);
@@ -149,18 +213,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     goToStep(1);
   });
 
-  // ─── Scan progress handler ───
   function handleProgressUpdate(msg) {
     if (msg.step === 'scan') {
       addScanLog(msg.detail, msg.type || 'info');
-      if (msg.type !== 'success' && msg.type !== 'error') {
-        scanProgressBar.style.width = '50%';
-      }
+      if (msg.type !== 'success' && msg.type !== 'error') scanProgressBar.style.width = '50%';
     }
-    if (msg.step === 'dmDone') {
-      // Final done
-      pollDMState();
-    }
+    if (msg.step === 'dmDone') pollDMState();
+    if (msg.step === 'boDone') pollBOState();
   }
 
   function addScanLog(text, type = 'info') {
@@ -177,39 +236,31 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // ═══════════════════════════════════════════
-  //  STEP 3: REVIEW
+  //  KEYWORD SCAN: STEP 3 REVIEW
   // ═══════════════════════════════════════════
 
   function renderMatchedUsers() {
     matchSummary.textContent = `${matchedUsers.length} user(s) commented with your keyword(s).`;
-
     if (!matchedUsers.length) {
       matchedList.innerHTML = '<div class="empty-state">No matching comments found.</div>';
       btnStartDMs.disabled = true;
       return;
     }
-
     bg({ action: 'getHistory' }).then(({ history }) => {
       const sentSet = new Set((history || []).filter(h => h.status === 'success').map(h => h.username));
-
       matchedList.innerHTML = matchedUsers.map((u, i) => `
         <div class="match-item">
           <input type="checkbox" class="match-cb" data-i="${i}" ${sentSet.has(u.username) ? '' : 'checked'} />
           <div class="match-avatar">${u.username[0].toUpperCase()}</div>
           <div class="match-info">
-            <div class="match-username">
-              @${u.username}
-              ${sentSet.has(u.username) ? '<span class="already-sent">Already sent</span>' : ''}
-            </div>
+            <div class="match-username">@${u.username} ${sentSet.has(u.username) ? '<span class="already-sent">Already sent</span>' : ''}</div>
             <div class="match-comment">"${u.comment}" <span class="match-keyword">${u.matchedKeyword}</span></div>
           </div>
         </div>
       `).join('');
-
       matchedList.querySelectorAll('.match-cb').forEach(cb => cb.addEventListener('change', updateCount));
       updateCount();
     });
-
     const preview = dmTemplateInput.value.trim().replace(/\{\{username\}\}/gi, matchedUsers[0]?.username || 'username');
     dmPreview.textContent = preview;
   }
@@ -220,45 +271,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     btnStartDMs.disabled = n === 0;
   }
 
-  btnSelectAll.addEventListener('click', () => {
-    matchedList.querySelectorAll('.match-cb').forEach(cb => cb.checked = true);
-    updateCount();
-  });
-
-  btnDeselectAll.addEventListener('click', () => {
-    matchedList.querySelectorAll('.match-cb').forEach(cb => cb.checked = false);
-    updateCount();
-  });
-
-  btnBackToConfig.addEventListener('click', async () => {
-    await bg({ action: 'reset' });
-    goToStep(1);
-  });
+  btnSelectAll.addEventListener('click', () => { matchedList.querySelectorAll('.match-cb').forEach(cb => cb.checked = true); updateCount(); });
+  btnDeselectAll.addEventListener('click', () => { matchedList.querySelectorAll('.match-cb').forEach(cb => cb.checked = false); updateCount(); });
+  btnBackToConfig.addEventListener('click', async () => { await bg({ action: 'reset' }); goToStep(1); });
 
   // ═══════════════════════════════════════════
-  //  STEP 3 → 4: START DMs
+  //  KEYWORD SCAN: STEP 3 → 4 START DMs
   // ═══════════════════════════════════════════
 
-  /** Shared function to initiate DM sending for a list of users */
   async function startDMsForUsers(users) {
-    // Prepare DM log
     dmLiveLog.innerHTML = '';
     dmProgressBar.style.width = '0%';
     dmStatusText.textContent = `Sending DMs: 0 / ${users.length}`;
     dmDoneActions.style.display = 'none';
     dmActiveActions.style.display = 'flex';
     btnPauseDMs.textContent = 'Pause';
-
-    // Pre-populate log entries for all users
-    users.forEach(u => {
-      addDMUserEntry(u.username, 'pending');
-    });
-
+    btnBackToConfigDM.style.display = 'none';
+    users.forEach(u => addDMUserEntry(u.username, 'pending'));
     goToStep(4);
-
     await bg({ action: 'startSendingDMs', selectedUsers: users });
-
-    // Start polling for state
     startDMPolling(users);
   }
 
@@ -267,43 +298,27 @@ document.addEventListener('DOMContentLoaded', async () => {
     matchedList.querySelectorAll('.match-cb:checked').forEach(cb => indices.push(parseInt(cb.dataset.i)));
     const selected = indices.map(i => matchedUsers[i]);
     if (!selected.length) return;
-
     await startDMsForUsers(selected);
   });
 
   // ═══════════════════════════════════════════
-  //  STEP 4: DM PROGRESS
+  //  KEYWORD SCAN: STEP 4 DM PROGRESS
   // ═══════════════════════════════════════════
 
-  // Sub-step labels
   const substepLabels = {
-    navigating:      'Opening profile...',
-    clickingMessage: 'Clicking "Message" button...',
-    following:       'Following user (no Message button)...',
-    followed:        'Followed — saved to retry queue',
-    waitingDM:       'Waiting for DM to open...',
-    typing:          'Typing message...',
-    sending:         'Sending message...',
-    done:            'DM sent!',
-    error:           'Error',
-    waiting:         'Waiting before next DM...'
+    navigating: 'Opening profile...', clickingMessage: 'Clicking "Message" button...',
+    following: 'Following user (no Message button)...', followed: 'Followed — saved to retry queue',
+    waitingDM: 'Waiting for DM to open...', typing: 'Typing message...',
+    sending: 'Sending message...', done: 'DM sent!', error: 'Error', waiting: 'Waiting before next DM...'
   };
-
   const substepOrder = ['navigating', 'clickingMessage', 'waitingDM', 'typing', 'done'];
 
   function handleDMProgressUpdate(msg) {
     const { username, substep, detail, currentIndex, total, sentLog } = msg;
-
-    // Update overall progress
     const pct = total > 0 ? Math.round(((sentLog?.length || 0) / total) * 100) : 0;
     dmProgressBar.style.width = `${pct}%`;
     dmStatusText.textContent = `Sending DMs: ${sentLog?.length || 0} / ${total}`;
-
-    if (username) {
-      updateDMUserEntry(username, substep, detail);
-    }
-
-    // Check if done
+    if (username) updateDMUserEntry(username, substep, detail);
     if (sentLog && sentLog.length >= total) {
       const successCount = sentLog.filter(l => l.status === 'success').length;
       const followedCount = sentLog.filter(l => l.status === 'followed').length;
@@ -343,107 +358,46 @@ document.addEventListener('DOMContentLoaded', async () => {
   function updateDMUserEntry(username, substep, detail) {
     const entry = document.getElementById(`dm-user-${username}`);
     if (!entry) return;
-
     const icon = entry.querySelector('.log-icon');
     const timeEl = document.getElementById(`dm-time-${username}`);
-
-    // Update icon
-    if (substep === 'done') {
-      icon.className = 'log-icon success';
-      icon.textContent = '\u2705';
-    } else if (substep === 'error') {
-      icon.className = 'log-icon error';
-      icon.textContent = '\u274C';
-    } else {
-      icon.className = 'log-icon active';
-      icon.textContent = '';
-    }
-
-    // Update sub-steps
     const container = document.getElementById(`dm-substeps-${username}`);
     if (!container) return;
+
+    if (substep === 'done') { icon.className = 'log-icon success'; icon.textContent = '\u2705'; }
+    else if (substep === 'error') { icon.className = 'log-icon error'; icon.textContent = '\u274C'; }
+    else if (substep === 'followed') { icon.className = 'log-icon followed'; icon.textContent = ''; }
+    else { icon.className = 'log-icon active'; icon.textContent = ''; }
 
     const allSubsteps = container.querySelectorAll('.log-substep');
     let reachedCurrent = false;
 
-    for (const el of allSubsteps) {
-      const s = el.dataset.substep;
-
-      if (substep === 'error') {
-        // Mark current as error, rest as waiting
-        if (s === substep || (!reachedCurrent && s !== 'done')) {
-          // Find the active one and mark it error
-        }
-        // Simple: mark all up to current as done, current as error
-        const idx = substepOrder.indexOf(s);
-        const errIdx = substepOrder.indexOf('done'); // error replaces done
-        if (idx < substepOrder.length - 1) {
-          // Check if this step was before the error
-          el.className = 'log-substep done';
-          el.querySelector('.substep-icon').textContent = '\u2713';
-        }
-      } else if (s === substep) {
-        el.className = 'log-substep active';
-        el.querySelector('.substep-icon').textContent = '\u25CF';
-        if (detail) el.querySelector('span:last-child').textContent = detail;
-        reachedCurrent = true;
-      } else if (!reachedCurrent) {
-        el.className = 'log-substep done';
-        el.querySelector('.substep-icon').textContent = '\u2713';
-      } else {
-        el.className = 'log-substep waiting';
-        el.querySelector('.substep-icon').textContent = '\u25CB';
-      }
-    }
-
-    // Handle error — replace the "done" substep with error message
-    if (substep === 'error') {
-      const doneEl = container.querySelector('[data-substep="done"]');
-      if (doneEl) {
-        doneEl.className = 'log-substep error';
-        doneEl.querySelector('.substep-icon').textContent = '\u2717';
-        doneEl.querySelector('span:last-child').textContent = detail || 'Error';
-      }
-    }
-
-    // Handle followed (Plan B) — replace remaining substeps with followed status
     if (substep === 'following' || substep === 'followed') {
-      // Mark navigating and clickingMessage as done
       for (const el of allSubsteps) {
         const s = el.dataset.substep;
-        if (s === 'navigating') {
-          el.className = 'log-substep done';
-          el.querySelector('.substep-icon').textContent = '\u2713';
-        } else if (s === 'clickingMessage') {
-          el.className = 'log-substep done';
-          el.querySelector('.substep-icon').textContent = '\u2713';
-          el.querySelector('span:last-child').textContent = 'No Message button found';
-        } else if (s === 'waitingDM' || s === 'typing') {
-          el.style.display = 'none';
-        } else if (s === 'done') {
-          if (substep === 'followed') {
-            el.className = 'log-substep followed';
-            el.querySelector('.substep-icon').textContent = '\uD83D\uDC64';
-            el.querySelector('span:last-child').textContent = detail || 'Followed — saved to retry queue';
-          } else {
-            el.className = 'log-substep active';
-            el.querySelector('.substep-icon').textContent = '\u25CF';
-            el.querySelector('span:last-child').textContent = detail || 'Following user...';
-          }
+        if (s === 'navigating') { el.className = 'log-substep done'; el.querySelector('.substep-icon').textContent = '\u2713'; }
+        else if (s === 'clickingMessage') { el.className = 'log-substep done'; el.querySelector('.substep-icon').textContent = '\u2713'; el.querySelector('span:last-child').textContent = 'No Message button found'; }
+        else if (s === 'waitingDM' || s === 'typing') { el.style.display = 'none'; }
+        else if (s === 'done') {
+          if (substep === 'followed') { el.className = 'log-substep followed'; el.querySelector('.substep-icon').textContent = '\uD83D\uDC64'; el.querySelector('span:last-child').textContent = detail || 'Followed — saved to retry queue'; }
+          else { el.className = 'log-substep active'; el.querySelector('.substep-icon').textContent = '\u25CF'; el.querySelector('span:last-child').textContent = detail || 'Following user...'; }
         }
       }
-      // Update entry icon
-      if (substep === 'followed') {
-        icon.className = 'log-icon followed';
-        icon.textContent = '';
+    } else if (substep === 'error') {
+      for (const el of allSubsteps) {
+        const s = el.dataset.substep;
+        if (s === 'done') { el.className = 'log-substep error'; el.querySelector('.substep-icon').textContent = '\u2717'; el.querySelector('span:last-child').textContent = detail || 'Error'; }
+        else { el.className = 'log-substep done'; el.querySelector('.substep-icon').textContent = '\u2713'; }
+      }
+    } else {
+      for (const el of allSubsteps) {
+        const s = el.dataset.substep;
+        if (s === substep) { el.className = 'log-substep active'; el.querySelector('.substep-icon').textContent = '\u25CF'; if (detail) el.querySelector('span:last-child').textContent = detail; reachedCurrent = true; }
+        else if (!reachedCurrent) { el.className = 'log-substep done'; el.querySelector('.substep-icon').textContent = '\u2713'; }
+        else { el.className = 'log-substep waiting'; el.querySelector('.substep-icon').textContent = '\u25CB'; }
       }
     }
 
-    if (substep === 'done' || substep === 'error') {
-      if (timeEl) timeEl.textContent = timeNow();
-    }
-
-    // Auto-scroll
+    if (substep === 'done' || substep === 'error' || substep === 'followed') { if (timeEl) timeEl.textContent = timeNow(); }
     dmLiveLog.scrollTop = dmLiveLog.scrollHeight;
   }
 
@@ -466,7 +420,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           btnPauseDMs.textContent = 'Pause';
           btnBackToConfigDM.style.display = 'none';
         }
-      } catch (e) { /* ignore */ }
+      } catch (e) {}
     }, 2000);
   }
 
@@ -485,15 +439,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   btnPauseDMs.addEventListener('click', async () => {
     const s = await bg({ action: 'getState' });
-    if (s.status === 'paused') {
-      await bg({ action: 'resumeDMs' });
-      btnPauseDMs.textContent = 'Pause';
-      btnBackToConfigDM.style.display = 'none';
-    } else {
-      await bg({ action: 'pauseDMs' });
-      btnPauseDMs.textContent = 'Resume';
-      btnBackToConfigDM.style.display = 'inline-flex';
-    }
+    if (s.status === 'paused') { await bg({ action: 'resumeDMs' }); btnPauseDMs.textContent = 'Pause'; btnBackToConfigDM.style.display = 'none'; }
+    else { await bg({ action: 'pauseDMs' }); btnPauseDMs.textContent = 'Resume'; btnBackToConfigDM.style.display = 'inline-flex'; }
   });
 
   btnBackToConfigDM.addEventListener('click', async () => {
@@ -511,9 +458,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     goToStep(1);
   });
 
-  // ═════════════════════════════════════════
-  //  PENDING FOLLOWS (Plan B)
-  // ═════════════════════════════════════════
+  // ═══════════════════════════════════════════
+  //  KEYWORD SCAN: PENDING FOLLOWS
+  // ═══════════════════════════════════════════
 
   async function refreshPendingFollows() {
     try {
@@ -521,30 +468,22 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (pendingFollows && pendingFollows.length > 0) {
         pendingSection.style.display = 'block';
         pendingBadge.textContent = pendingFollows.length;
-
         pendingList.innerHTML = pendingFollows.map(u => {
           const statusClass = (u.followStatus || '').toLowerCase().includes('request') ? 'requested' : 'following';
           const statusLabel = u.alreadyFollowing ? 'Already following' : (u.followStatus || 'Followed');
           const timeAgo = u.timestamp ? new Date(u.timestamp).toLocaleDateString() : '';
-          return `
-            <div class="pending-user">
-              <div class="pending-avatar">${(u.username || '?')[0].toUpperCase()}</div>
-              <div class="pending-info">
-                <div class="pending-username">@${u.username}</div>
-                <div class="pending-status">
-                  <span class="pending-status-badge ${statusClass}">${statusLabel}</span>
-                  ${timeAgo ? `<span style="margin-left:4px;font-size:10px;color:var(--text-muted)">${timeAgo}</span>` : ''}
-                </div>
-              </div>
+          return `<div class="pending-user">
+            <div class="pending-avatar">${(u.username || '?')[0].toUpperCase()}</div>
+            <div class="pending-info">
+              <div class="pending-username">@${u.username}</div>
+              <div class="pending-status"><span class="pending-status-badge ${statusClass}">${statusLabel}</span>${timeAgo ? ` <span style="margin-left:4px;font-size:10px;color:var(--text-muted)">${timeAgo}</span>` : ''}</div>
             </div>
-          `;
+          </div>`;
         }).join('');
       } else {
         pendingSection.style.display = 'none';
       }
-    } catch (e) {
-      pendingSection.style.display = 'none';
-    }
+    } catch (e) { pendingSection.style.display = 'none'; }
   }
 
   pendingToggle.addEventListener('click', () => {
@@ -555,31 +494,397 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   btnRetryPending.addEventListener('click', async () => {
     const dmTemplate = dmTemplateInput.value.trim();
-    const delaySec = parseInt(delayInput.value) || 30;
-    if (!dmTemplate) {
-      flash(dmTemplateInput);
-      goToStep(1);
+    if (!dmTemplate) { flash(dmTemplateInput); goToStep(1); return; }
+    const { pendingFollows } = await bg({ action: 'getPendingFollows' });
+    if (!pendingFollows || !pendingFollows.length) return;
+    await bg({ action: 'clearPendingFollows' });
+    await startDMsForUsers(pendingFollows.map(p => ({ username: p.username, comment: p.comment || '', matchedKeyword: p.matchedKeyword || '' })));
+  });
+
+  btnClearPending.addEventListener('click', async () => { await bg({ action: 'clearPendingFollows' }); await refreshPendingFollows(); });
+
+
+  // ═══════════════════════════════════════════════════════════════
+  //  BULK OUTREACH: REPLY DIRECTIONS (TEMPLATES)
+  // ═══════════════════════════════════════════════════════════════
+
+  async function loadTemplates() {
+    const data = await chrome.storage.local.get('boTemplates');
+    templates = data.boTemplates || [];
+    renderTemplates();
+    populateTemplateDropdowns();
+  }
+
+  async function saveTemplates() {
+    await chrome.storage.local.set({ boTemplates: templates });
+    renderTemplates();
+    populateTemplateDropdowns();
+  }
+
+  function renderTemplates() {
+    if (!templates.length) {
+      templatesList.innerHTML = '<div class="empty-state">No templates yet. Add one below.</div>';
+      return;
+    }
+    templatesList.innerHTML = templates.map((t, i) => `
+      <div class="template-item">
+        <div class="template-color" style="background:${t.color}"></div>
+        <div class="template-body">
+          <div class="template-name">${escHtml(t.name)}</div>
+          <div class="template-preview">${escHtml(t.body.substring(0, 80))}${t.body.length > 80 ? '...' : ''}</div>
+        </div>
+        <div class="template-actions">
+          <button class="template-btn delete" data-idx="${i}" title="Delete">&#x2715;</button>
+        </div>
+      </div>
+    `).join('');
+
+    templatesList.querySelectorAll('.template-btn.delete').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        templates.splice(parseInt(btn.dataset.idx), 1);
+        await saveTemplates();
+      });
+    });
+  }
+
+  function populateTemplateDropdowns() {
+    // Default template dropdown
+    const val = boDefaultTemplate.value;
+    boDefaultTemplate.innerHTML = '<option value="">— Select a template —</option>' +
+      templates.map(t => `<option value="${t.id}">${escHtml(t.name)}</option>`).join('');
+    if (val) boDefaultTemplate.value = val;
+
+    // Per-handle dropdowns
+    document.querySelectorAll('.handle-template-select').forEach(sel => {
+      const v = sel.value;
+      sel.innerHTML = templates.map(t => `<option value="${t.id}">${escHtml(t.name)}</option>`).join('');
+      if (v) sel.value = v;
+    });
+  }
+
+  btnAddTemplate.addEventListener('click', async () => {
+    const name = newTemplateName.value.trim();
+    const body = newTemplateBody.value.trim();
+    if (!name) return flash(newTemplateName);
+    if (!body) return flash(newTemplateBody);
+
+    templates.push({
+      id: 'tpl_' + Date.now(),
+      name,
+      body,
+      color: TEMPLATE_COLORS[templates.length % TEMPLATE_COLORS.length]
+    });
+    await saveTemplates();
+    newTemplateName.value = '';
+    newTemplateBody.value = '';
+  });
+
+
+  // ═══════════════════════════════════════════════════════════════
+  //  BULK OUTREACH: HANDLE LIST & RUN
+  // ═══════════════════════════════════════════════════════════════
+
+  btnParseHandles.addEventListener('click', () => {
+    const raw = boHandlesInput.value.trim();
+    if (!raw) return flash(boHandlesInput);
+    if (!templates.length) {
+      flash(newTemplateName);
+      // Switch to templates tab
+      subTabs.forEach(t => t.classList.toggle('active', t.dataset.subtab === 'bo-templates'));
+      Object.entries(subPanels).forEach(([k, v]) => v.classList.toggle('active', k === 'bo-templates'));
       return;
     }
 
-    const { pendingFollows } = await bg({ action: 'getPendingFollows' });
-    if (!pendingFollows || !pendingFollows.length) return;
+    const defaultTplId = boDefaultTemplate.value || templates[0]?.id || '';
+    const handles = raw.split('\n').map(h => h.trim().replace(/^@/, '')).filter(Boolean);
+    const unique = [...new Set(handles)];
 
-    // Clear pending queue before retrying
-    await bg({ action: 'clearPendingFollows' });
+    parsedHandles = unique.map(username => ({ username, templateId: defaultTplId }));
 
-    // Start DMs for pending users
-    await startDMsForUsers(pendingFollows.map(p => ({
-      username: p.username,
-      comment: p.comment || '',
-      matchedKeyword: p.matchedKeyword || ''
-    })));
+    boHandleCount.textContent = `${parsedHandles.length} handles`;
+    boHandleList.innerHTML = parsedHandles.map((h, i) => `
+      <div class="handle-row" data-idx="${i}">
+        <div class="handle-avatar">${h.username[0].toUpperCase()}</div>
+        <div class="handle-name">@${h.username}</div>
+        <select class="handle-template-select" data-idx="${i}">
+          ${templates.map(t => `<option value="${t.id}" ${t.id === h.templateId ? 'selected' : ''}>${escHtml(t.name)}</option>`).join('')}
+        </select>
+        <button class="handle-remove" data-idx="${i}">&times;</button>
+      </div>
+    `).join('');
+
+    // Wire up per-handle template changes
+    boHandleList.querySelectorAll('.handle-template-select').forEach(sel => {
+      sel.addEventListener('change', () => {
+        parsedHandles[parseInt(sel.dataset.idx)].templateId = sel.value;
+      });
+    });
+
+    // Wire up remove buttons
+    boHandleList.querySelectorAll('.handle-remove').forEach(btn => {
+      btn.addEventListener('click', () => {
+        parsedHandles.splice(parseInt(btn.dataset.idx), 1);
+        btnParseHandles.click(); // Re-render
+      });
+    });
+
+    boHandleAssignments.style.display = 'block';
+    btnStartOutreach.style.display = 'flex';
   });
 
-  btnClearPending.addEventListener('click', async () => {
-    await bg({ action: 'clearPendingFollows' });
-    await refreshPendingFollows();
+  btnStartOutreach.addEventListener('click', async () => {
+    if (!parsedHandles.length) return;
+
+    // Build the outreach list with resolved template bodies
+    const outreachList = parsedHandles.map(h => {
+      const tpl = templates.find(t => t.id === h.templateId);
+      return {
+        username: h.username,
+        templateId: h.templateId,
+        templateName: tpl?.name || 'Unknown',
+        dmTemplate: tpl?.body || ''
+      };
+    });
+
+    const delaySec = parseInt(boDelayInput.value) || 30;
+
+    // Show progress
+    boProgress.style.display = 'block';
+    boLiveLog.innerHTML = '';
+    boProgressBar.style.width = '0%';
+    boStatusText.textContent = `Processing: 0 / ${outreachList.length}`;
+    boDoneActions.style.display = 'none';
+    boActiveActions.style.display = 'flex';
+    btnPauseOutreach.textContent = 'Pause';
+    btnBackFromOutreach.style.display = 'none';
+
+    // Pre-populate log
+    outreachList.forEach(u => addBOUserEntry(u.username, u.templateName));
+
+    await bg({ action: 'startBulkOutreach', outreachList, delaySeconds: delaySec });
+    startBOPolling(outreachList);
   });
+
+  function addBOUserEntry(username, templateName) {
+    const entry = document.createElement('div');
+    entry.className = 'log-entry';
+    entry.id = `bo-user-${username}`;
+    entry.innerHTML = `
+      <div class="log-icon pending"></div>
+      <div class="log-body">
+        <div class="log-username">@${username} <span class="waitlist-template-name">${escHtml(templateName)}</span></div>
+        <div class="log-substeps" id="bo-substeps-${username}">
+          <div class="log-substep waiting" data-substep="checking"><span class="substep-icon">\u25CB</span><span>Checking profile...</span></div>
+          <div class="log-substep waiting" data-substep="action"><span class="substep-icon">\u25CB</span><span>Determining action...</span></div>
+          <div class="log-substep waiting" data-substep="result"><span class="substep-icon">\u25CB</span><span>Waiting...</span></div>
+        </div>
+      </div>
+      <div class="log-time" id="bo-time-${username}"></div>
+    `;
+    boLiveLog.appendChild(entry);
+  }
+
+  function handleBOProgressUpdate(msg) {
+    const { username, substep, detail, currentIndex, total, sentLog } = msg;
+    const pct = total > 0 ? Math.round(((sentLog?.length || 0) / total) * 100) : 0;
+    boProgressBar.style.width = `${pct}%`;
+    boStatusText.textContent = `Processing: ${sentLog?.length || 0} / ${total}`;
+
+    if (username) updateBOUserEntry(username, substep, detail);
+
+    if (sentLog && sentLog.length >= total) {
+      const dmSent = sentLog.filter(l => l.status === 'success').length;
+      const waitlisted = sentLog.filter(l => l.status === 'waitlisted').length;
+      boProgressBar.style.width = '100%';
+      let msg2 = `Complete! ${dmSent} DMs sent.`;
+      if (waitlisted > 0) msg2 += ` ${waitlisted} added to waitlist.`;
+      boStatusText.textContent = msg2;
+      boDoneActions.style.display = 'flex';
+      boActiveActions.style.display = 'none';
+      clearInterval(boPollTimer);
+      refreshWaitlist();
+    }
+  }
+
+  function updateBOUserEntry(username, substep, detail) {
+    const entry = document.getElementById(`bo-user-${username}`);
+    if (!entry) return;
+    const icon = entry.querySelector('.log-icon');
+    const timeEl = document.getElementById(`bo-time-${username}`);
+    const container = document.getElementById(`bo-substeps-${username}`);
+    if (!container) return;
+
+    const allSubs = container.querySelectorAll('.log-substep');
+
+    if (substep === 'checking') {
+      icon.className = 'log-icon active'; icon.textContent = '';
+      allSubs[0].className = 'log-substep active';
+      allSubs[0].querySelector('.substep-icon').textContent = '\u25CF';
+      allSubs[0].querySelector('span:last-child').textContent = detail || 'Checking profile...';
+    } else if (substep === 'dm-direct') {
+      allSubs[0].className = 'log-substep done'; allSubs[0].querySelector('.substep-icon').textContent = '\u2713';
+      allSubs[1].className = 'log-substep active'; allSubs[1].querySelector('.substep-icon').textContent = '\u25CF';
+      allSubs[1].querySelector('span:last-child').textContent = detail || 'Message button found — sending DM...';
+    } else if (substep === 'following') {
+      allSubs[0].className = 'log-substep done'; allSubs[0].querySelector('.substep-icon').textContent = '\u2713';
+      allSubs[1].className = 'log-substep active'; allSubs[1].querySelector('.substep-icon').textContent = '\u25CF';
+      allSubs[1].querySelector('span:last-child').textContent = detail || 'No Message button — following...';
+    } else if (substep === 'typing') {
+      allSubs[1].className = 'log-substep done'; allSubs[1].querySelector('.substep-icon').textContent = '\u2713';
+      allSubs[2].className = 'log-substep active'; allSubs[2].querySelector('.substep-icon').textContent = '\u25CF';
+      allSubs[2].querySelector('span:last-child').textContent = detail || 'Typing message...';
+    } else if (substep === 'done') {
+      icon.className = 'log-icon success'; icon.textContent = '\u2705';
+      allSubs.forEach(el => { el.className = 'log-substep done'; el.querySelector('.substep-icon').textContent = '\u2713'; });
+      allSubs[2].querySelector('span:last-child').textContent = detail || 'DM sent!';
+      if (timeEl) timeEl.textContent = timeNow();
+    } else if (substep === 'waitlisted') {
+      icon.className = 'log-icon followed'; icon.textContent = '';
+      allSubs[0].className = 'log-substep done'; allSubs[0].querySelector('.substep-icon').textContent = '\u2713';
+      allSubs[1].className = 'log-substep done'; allSubs[1].querySelector('.substep-icon').textContent = '\u2713';
+      allSubs[1].querySelector('span:last-child').textContent = 'Followed — added to waitlist';
+      allSubs[2].className = 'log-substep followed'; allSubs[2].querySelector('.substep-icon').textContent = '\uD83D\uDC64';
+      allSubs[2].querySelector('span:last-child').textContent = detail || 'Waiting for follow-back';
+      if (timeEl) timeEl.textContent = timeNow();
+    } else if (substep === 'error') {
+      icon.className = 'log-icon error'; icon.textContent = '\u274C';
+      allSubs[0].className = 'log-substep done'; allSubs[0].querySelector('.substep-icon').textContent = '\u2713';
+      allSubs[1].className = 'log-substep done'; allSubs[1].querySelector('.substep-icon').textContent = '\u2713';
+      allSubs[2].className = 'log-substep error'; allSubs[2].querySelector('.substep-icon').textContent = '\u2717';
+      allSubs[2].querySelector('span:last-child').textContent = detail || 'Error';
+      if (timeEl) timeEl.textContent = timeNow();
+    }
+
+    boLiveLog.scrollTop = boLiveLog.scrollHeight;
+  }
+
+  function startBOPolling(outreachList) {
+    boPollTimer = setInterval(async () => {
+      try {
+        const s = await bg({ action: 'getBOState' });
+        if (s.status === 'done') {
+          clearInterval(boPollTimer);
+          boDoneActions.style.display = 'flex';
+          boActiveActions.style.display = 'none';
+        } else if (s.status === 'paused') {
+          boStatusText.textContent = `Paused — ${s.sentLog?.length || 0} / ${outreachList.length} processed`;
+          btnPauseOutreach.textContent = 'Resume';
+          btnBackFromOutreach.style.display = 'inline-flex';
+        } else {
+          btnPauseOutreach.textContent = 'Pause';
+          btnBackFromOutreach.style.display = 'none';
+        }
+      } catch (e) {}
+    }, 2000);
+  }
+
+  async function pollBOState() {
+    const s = await bg({ action: 'getBOState' });
+    if (s.status === 'done') {
+      clearInterval(boPollTimer);
+      boDoneActions.style.display = 'flex';
+      boActiveActions.style.display = 'none';
+    }
+  }
+
+  btnPauseOutreach.addEventListener('click', async () => {
+    const s = await bg({ action: 'getBOState' });
+    if (s.status === 'paused') { await bg({ action: 'resumeBO' }); btnPauseOutreach.textContent = 'Pause'; btnBackFromOutreach.style.display = 'none'; }
+    else { await bg({ action: 'pauseBO' }); btnPauseOutreach.textContent = 'Resume'; btnBackFromOutreach.style.display = 'inline-flex'; }
+  });
+
+  btnBackFromOutreach.addEventListener('click', async () => {
+    clearInterval(boPollTimer);
+    await bg({ action: 'resetBO' });
+    boProgress.style.display = 'none';
+    btnStartOutreach.style.display = 'flex';
+  });
+
+  btnNewOutreach.addEventListener('click', async () => {
+    clearInterval(boPollTimer);
+    await bg({ action: 'resetBO' });
+    boProgress.style.display = 'none';
+    boHandleAssignments.style.display = 'none';
+    btnStartOutreach.style.display = 'none';
+    boHandlesInput.value = '';
+    parsedHandles = [];
+    await refreshWaitlist();
+  });
+
+
+  // ═══════════════════════════════════════════════════════════════
+  //  BULK OUTREACH: WAITLIST
+  // ═══════════════════════════════════════════════════════════════
+
+  async function refreshWaitlist() {
+    try {
+      const { waitlist } = await bg({ action: 'getWaitlist' });
+      const count = (waitlist || []).length;
+
+      waitlistBadge.textContent = count;
+      waitlistBadge.style.display = count > 0 ? 'inline-flex' : 'none';
+      waitlistCount.textContent = count;
+
+      if (count > 0) {
+        waitlistList.innerHTML = waitlist.map(u => {
+          const tpl = templates.find(t => t.id === u.templateId);
+          return `<div class="waitlist-item">
+            <div class="pending-avatar">${(u.username || '?')[0].toUpperCase()}</div>
+            <div class="waitlist-info">
+              <div class="waitlist-username">@${u.username}</div>
+              <div class="waitlist-meta">
+                <span class="waitlist-template-name">${escHtml(tpl?.name || u.templateName || 'Unknown')}</span>
+                ${u.timestamp ? `<span style="margin-left:4px">${new Date(u.timestamp).toLocaleDateString()}</span>` : ''}
+              </div>
+            </div>
+          </div>`;
+        }).join('');
+      } else {
+        waitlistList.innerHTML = '<div class="empty-state">No users on the waitlist.</div>';
+      }
+    } catch (e) {
+      waitlistList.innerHTML = '<div class="empty-state">No users on the waitlist.</div>';
+    }
+  }
+
+  btnRecheckWaitlist.addEventListener('click', async () => {
+    const { waitlist } = await bg({ action: 'getWaitlist' });
+    if (!waitlist || !waitlist.length) return;
+
+    waitlistProgress.style.display = 'block';
+    waitlistLiveLog.innerHTML = '';
+    waitlistProgressBar.style.width = '0%';
+    waitlistStatusText.textContent = `Re-checking: 0 / ${waitlist.length}`;
+
+    await bg({ action: 'recheckWaitlist' });
+  });
+
+  function handleWaitlistCheckUpdate(msg) {
+    const { username, substep, detail, currentIndex, total, results } = msg;
+    const pct = total > 0 ? Math.round(((results?.length || 0) / total) * 100) : 0;
+    waitlistProgressBar.style.width = `${pct}%`;
+    waitlistStatusText.textContent = `Re-checking: ${results?.length || 0} / ${total}`;
+
+    if (username) {
+      const iconMap = { checking: '\u2139\uFE0F', 'dm-sent': '\u2705', 'still-waiting': '\uD83D\uDC64', error: '\u274C' };
+      const typeMap = { checking: 'info', 'dm-sent': 'success', 'still-waiting': 'info', error: 'error' };
+      addLogEntry(waitlistLiveLog, `@${username}: ${detail}`, typeMap[substep] || 'info', iconMap[substep]);
+    }
+
+    if (results && results.length >= total) {
+      const sent = results.filter(r => r.status === 'dm-sent').length;
+      waitlistStatusText.textContent = `Done! ${sent} DMs sent. ${total - sent} still waiting.`;
+      waitlistProgressBar.style.width = '100%';
+      refreshWaitlist();
+    }
+  }
+
+  btnClearWaitlist.addEventListener('click', async () => {
+    await bg({ action: 'clearWaitlist' });
+    await refreshWaitlist();
+    waitlistProgress.style.display = 'none';
+  });
+
 
   // ═══════════════════════════════════════════
   //  RESTORE STATE
@@ -588,37 +893,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   async function restoreState() {
     try {
       const s = await bg({ action: 'getState' });
-      if (s.status === 'reviewing') {
-        matchedUsers = s.matchedUsers || [];
-        renderMatchedUsers();
-        goToStep(3);
-      } else if (s.status === 'sending' || s.status === 'paused') {
-        goToStep(4);
-        dmLiveLog.innerHTML = '';
+      if (s.status === 'reviewing') { matchedUsers = s.matchedUsers || []; renderMatchedUsers(); goToStep(3); }
+      else if (s.status === 'sending' || s.status === 'paused') {
+        goToStep(4); dmLiveLog.innerHTML = '';
         (s.selectedUsers || []).forEach(u => addDMUserEntry(u.username, 'pending'));
-        // Update already-processed entries
-        (s.sentLog || []).forEach(log => {
-          const st = log.status === 'success' ? 'done' : (log.status === 'followed' ? 'followed' : 'error');
-          updateDMUserEntry(log.username, st, log.message);
-        });
+        (s.sentLog || []).forEach(log => { const st = log.status === 'success' ? 'done' : (log.status === 'followed' ? 'followed' : 'error'); updateDMUserEntry(log.username, st, log.message); });
         startDMPolling(s.selectedUsers || []);
       } else if (s.status === 'done') {
-        matchedUsers = s.matchedUsers || [];
-        goToStep(4);
+        matchedUsers = s.matchedUsers || []; goToStep(4);
         const total = s.selectedUsers?.length || 0;
         const successCount = (s.sentLog || []).filter(l => l.status === 'success').length;
         dmStatusText.textContent = `Complete! ${successCount} / ${total} DMs sent.`;
         dmProgressBar.style.width = '100%';
-        dmDoneActions.style.display = 'flex';
-        dmActiveActions.style.display = 'none';
+        dmDoneActions.style.display = 'flex'; dmActiveActions.style.display = 'none';
         dmLiveLog.innerHTML = '';
         (s.selectedUsers || []).forEach(u => addDMUserEntry(u.username, 'pending'));
-        (s.sentLog || []).forEach(log => {
-          const st = log.status === 'success' ? 'done' : (log.status === 'followed' ? 'followed' : 'error');
-          updateDMUserEntry(log.username, st, log.message);
-        });
+        (s.sentLog || []).forEach(log => { const st = log.status === 'success' ? 'done' : (log.status === 'followed' ? 'followed' : 'error'); updateDMUserEntry(log.username, st, log.message); });
       }
-    } catch (e) { /* fresh */ }
+    } catch (e) {}
   }
 
   async function loadLastConfig() {
@@ -629,10 +921,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (config.keywords) keywordsInput.value = config.keywords.join(', ');
         if (config.dmTemplate) dmTemplateInput.value = config.dmTemplate;
         if (config.delaySeconds) delayInput.value = config.delaySeconds;
-        autoSendToggle.checked = false; // Always default to unchecked
+        autoSendToggle.checked = false;
       }
     } catch (e) {}
   }
+
 
   // ═══════════════════════════════════════════
   //  HELPERS
@@ -655,10 +948,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     setTimeout(() => { input.style.borderColor = ''; input.style.boxShadow = ''; }, 2000);
   }
 
-  function timeNow() {
-    return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  }
-
+  function timeNow() { return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+  function escHtml(s) { return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+
+  function addLogEntry(container, text, type, icon) {
+    const entry = document.createElement('div');
+    entry.className = 'log-entry';
+    entry.innerHTML = `<div class="log-icon ${type}">${icon || ''}</div><div class="log-body"><div class="log-detail">${text}</div></div><div class="log-time">${timeNow()}</div>`;
+    container.appendChild(entry);
+    container.scrollTop = container.scrollHeight;
+  }
 
 });

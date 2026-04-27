@@ -34,6 +34,7 @@
       scanComments: () => handleScanComments(msg),
       clickMessageButton: () => handleClickMessageButton(),
       clickFollowButton: () => handleClickFollowButton(),
+      checkProfileActions: () => handleCheckProfileActions(),
       typeAndSendDM: () => handleTypeAndSendDM(msg.message),
       ping: () => Promise.resolve({ pong: true })
     };
@@ -271,6 +272,44 @@
     }
 
     return { error: 'No "Message" button found on this profile', noMessage: true };
+  }
+
+  // ════════════════════════════════════════════════════════════
+  //  ACTION: CHECK PROFILE ACTIONS (detect Message vs Follow)
+  // ════════════════════════════════════════════════════════════
+
+  async function handleCheckProfileActions() {
+    // Wait for profile to render
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const buttons = document.querySelectorAll('div[role="button"], button');
+      let hasMessage = false;
+      let hasFollow = false;
+      let isFollowing = false;
+      let isRequested = false;
+
+      for (const el of buttons) {
+        const text = el.textContent.trim();
+        if (text === 'Message') hasMessage = true;
+        if (text === 'Follow') hasFollow = true;
+        if (text === 'Following') isFollowing = true;
+        if (text === 'Requested') isRequested = true;
+      }
+
+      // If we found at least one relevant button, return the result
+      if (hasMessage || hasFollow || isFollowing || isRequested) {
+        return {
+          hasMessage,
+          hasFollow,
+          isFollowing,
+          isRequested
+        };
+      }
+
+      await sleep(500);
+    }
+
+    // Fallback: couldn't determine
+    return { hasMessage: false, hasFollow: false, isFollowing: false, isRequested: false };
   }
 
   // ════════════════════════════════════════════════════════════
