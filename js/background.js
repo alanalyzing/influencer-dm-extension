@@ -41,7 +41,8 @@ let boState = {
   currentIndex: 0,
   tabId: null,
   cadenceConfig: null,
-  platform: 'instagram'
+  platform: 'instagram',
+  behaviorSettings: { alwaysFollow: true, dmAfterFollow: true, waitlistPrivate: true }
 };
 
 // ─── Cadence timer ───
@@ -186,6 +187,7 @@ const handlers = {
     boState.delaySeconds = msg.delaySeconds || 60;
     boState.cadenceConfig = msg.cadenceConfig || null;
     boState.platform = msg.platform || 'instagram';
+    boState.behaviorSettings = msg.behaviorSettings || { alwaysFollow: true, dmAfterFollow: true, waitlistPrivate: true };
     boState.status = 'sending';
     boState.currentIndex = 0;
     boState.sentLog = [];
@@ -338,6 +340,7 @@ async function runDMLoop() {
 
 async function runBulkOutreachLoop() {
   const platform = boState.platform || 'instagram';
+  const settings = boState.behaviorSettings || { alwaysFollow: true, dmAfterFollow: true, waitlistPrivate: true };
 
   if (!boState.tabId) {
     const tab = await getOrCreateTab(platformBaseUrl(platform), platform);
@@ -365,7 +368,17 @@ async function runBulkOutreachLoop() {
       const profileCheck = await sendToTab(boState.tabId, { action: 'checkProfileActions' });
 
       if (profileCheck && profileCheck.hasMessage) {
-        // ── Direct DM path ──
+        // ── Message button visible path ──
+        let didFollow = false;
+
+        // Setting: Always follow before sending DM (even when Message is already visible)
+        if (settings.alwaysFollow && !profileCheck.isFollowing) {
+          broadcastBOProgress(user.username, 'following', 'Following before sending DM...');
+          const followResult = await sendToTab(boState.tabId, { action: 'clickFollowButton' });
+          didFollow = followResult?.success || false;
+          await delay(1500);
+        }
+
         // For Threads: redirect to Instagram for DM since Threads has no web DMs
         if (platform === 'threads') {
           broadcastBOProgress(user.username, 'dm-direct', 'Message available — redirecting to Instagram for DM...');
@@ -390,17 +403,18 @@ async function runBulkOutreachLoop() {
         const typeResult = await sendToTab(boState.tabId, { action: 'typeAndSendDM', message: personalizedMsg });
         if (typeResult && typeResult.error) throw new Error(typeResult.error);
 
-        broadcastBOProgress(user.username, 'done', 'DM sent!');
-        boState.sentLog.push({ username: user.username, status: 'success', message: 'DM sent', timestamp: Date.now() });
+        const doneMsg = didFollow ? 'Followed & DM sent!' : 'DM sent!';
+        broadcastBOProgress(user.username, 'done', doneMsg);
+        boState.sentLog.push({ username: user.username, status: 'success', message: doneMsg, timestamp: Date.now() });
 
         await saveDMHistory({
           username: user.username,
           status: 'messaged',
-          message: `DM sent (${user.templateName})`,
+          message: `${didFollow ? 'Followed & ' : ''}DM sent (${user.templateName})`,
           templateName: user.templateName,
           timestamp: Date.now(),
           viewed: true,
-          followed: false,
+          followed: didFollow,
           platform
         });
 
@@ -418,35 +432,54 @@ async function runBulkOutreachLoop() {
         const alreadyFollowing = followResult?.alreadyFollowing || false;
 
         if (followStatus === 'Requested') {
-          // ── Private account, needs approval → Waitlist ──
-          await saveToWaitlist({
-            username: user.username,
-            templateId: user.templateId,
-            templateName: user.templateName,
-            dmTemplate: user.dmTemplate,
-            followStatus: 'Requested',
-            alreadyFollowing: false,
-            timestamp: new Date().toISOString(),
-            platform
-          });
+          // ── Private account, needs approval ──
+          if (settings.waitlistPrivate) {
+            // Setting: Waitlist private accounts
+            await saveToWaitlist({
+              username: user.username,
+              templateId: user.templateId,
+              templateName: user.templateName,
+              dmTemplate: user.dmTemplate,
+              followStatus: 'Requested',
+              alreadyFollowing: false,
+              timestamp: new Date().toISOString(),
+              platform
+            });
 
-          const statusMsg = `Follow requested @${user.username} — added to waitlist (pending approval)`;
-          broadcastBOProgress(user.username, 'waitlisted', statusMsg);
-          boState.sentLog.push({ username: user.username, status: 'waitlisted', message: statusMsg, timestamp: Date.now() });
+            const statusMsg = `Follow requested @${user.username} — added to waitlist (pending approval)`;
+            broadcastBOProgress(user.username, 'waitlisted', statusMsg);
+            boState.sentLog.push({ username: user.username, status: 'waitlisted', message: statusMsg, timestamp: Date.now() });
 
-          await saveDMHistory({
-            username: user.username,
-            status: 'requested',
-            message: statusMsg,
-            templateName: user.templateName,
-            timestamp: Date.now(),
-            viewed: true,
-            followed: true,
-            platform
-          });
+            await saveDMHistory({
+              username: user.username,
+              status: 'requested',
+              message: statusMsg,
+              templateName: user.templateName,
+              timestamp: Date.now(),
+              viewed: true,
+              followed: true,
+              platform
+            });
+          } else {
+            // Setting: Skip private accounts entirely
+            const statusMsg = `Follow requested @${user.username} — skipped (private account)`;
+            broadcastBOProgress(user.username, 'skipped', statusMsg);
+            boState.sentLog.push({ username: user.username, status: 'skipped', message: statusMsg, timestamp: Date.now() });
 
-        } else {
-          // ── Following (public) or already following → try to DM now ──
+            await saveDMHistory({
+              username: user.username,
+              status: 'skipped',
+              message: statusMsg,
+              templateName: user.templateName,
+              timestamp: Date.now(),
+              viewed: true,
+              followed: true,
+              platform
+            });
+          }
+
+        } else if (settings.dmAfterFollow) {
+          // ── Following (public) or already following → DM immediately (setting enabled) ──
           broadcastBOProgress(user.username, 'checking', `Followed @${user.username} — checking for Message button...`);
 
           // For Threads: after follow, redirect to Instagram for DM
@@ -498,7 +531,7 @@ async function runBulkOutreachLoop() {
             }
 
           } else {
-            // Message button still not visible → Waitlist
+            // Message button still not visible → Waitlist as fallback
             await saveToWaitlist({
               username: user.username,
               templateId: user.templateId,
@@ -525,6 +558,34 @@ async function runBulkOutreachLoop() {
               platform
             });
           }
+
+        } else {
+          // ── Setting: Don't DM after follow → add to waitlist for later ──
+          await saveToWaitlist({
+            username: user.username,
+            templateId: user.templateId,
+            templateName: user.templateName,
+            dmTemplate: user.dmTemplate,
+            followStatus: alreadyFollowing ? 'AlreadyFollowing' : followStatus,
+            alreadyFollowing,
+            timestamp: new Date().toISOString(),
+            platform
+          });
+
+          const statusMsg = `Followed @${user.username} — added to waitlist (DM later)`;
+          broadcastBOProgress(user.username, 'waitlisted', statusMsg);
+          boState.sentLog.push({ username: user.username, status: 'waitlisted', message: statusMsg, timestamp: Date.now() });
+
+          await saveDMHistory({
+            username: user.username,
+            status: 'followed',
+            message: statusMsg,
+            templateName: user.templateName,
+            timestamp: Date.now(),
+            viewed: true,
+            followed: true,
+            platform
+          });
         }
       }
 

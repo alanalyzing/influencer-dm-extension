@@ -129,6 +129,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const postUrlLabel = $('postUrlLabel');
   const boHandlesLabel = $('boHandlesLabel');
 
+  // ─── DOM refs: Behavior Settings ───
+  const settingAlwaysFollow = $('settingAlwaysFollow');
+  const settingDMAfterFollow = $('settingDMAfterFollow');
+  const settingWaitlistPrivate = $('settingWaitlistPrivate');
+
   // ─── State ───
   let currentStep = 1;
   let matchedUsers = [];
@@ -802,7 +807,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Scroll to progress card
     boProgress.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-    await bg({ action: 'startBulkOutreach', outreachList, delaySeconds: delaySec, cadenceConfig, platform: currentPlatform });
+    const behaviorSettings = {
+      alwaysFollow: settingAlwaysFollow?.checked ?? true,
+      dmAfterFollow: settingDMAfterFollow?.checked ?? true,
+      waitlistPrivate: settingWaitlistPrivate?.checked ?? true
+    };
+
+    await bg({ action: 'startBulkOutreach', outreachList, delaySeconds: delaySec, cadenceConfig, platform: currentPlatform, behaviorSettings });
     startBOPolling(outreachList);
   });
 
