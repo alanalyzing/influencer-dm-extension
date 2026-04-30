@@ -45,6 +45,62 @@ let boState = {
   behaviorSettings: { alwaysFollow: true, dmAfterFollow: true, waitlistPrivate: true }
 };
 
+// ─── Session Health Monitor ───
+let sessionHealth = {
+  recentResults: [],   // Last N results: true = success, false = failure
+  windowSize: 5,       // Track last 5 attempts
+  failThreshold: 3,    // Auto-pause if 3 of last 5 fail
+  consecutiveFails: 0, // Track consecutive failures
+  consecutiveFailMax: 2, // Auto-pause after 2 consecutive failures
+  totalSent: 0,
+  totalFailed: 0,
+  adaptiveDelay: 0     // Extra delay added when health degrades
+};
+
+function resetSessionHealth() {
+  sessionHealth.recentResults = [];
+  sessionHealth.consecutiveFails = 0;
+  sessionHealth.totalSent = 0;
+  sessionHealth.totalFailed = 0;
+  sessionHealth.adaptiveDelay = 0;
+}
+
+function recordHealthResult(success) {
+  sessionHealth.recentResults.push(success);
+  if (sessionHealth.recentResults.length > sessionHealth.windowSize) {
+    sessionHealth.recentResults.shift();
+  }
+
+  if (success) {
+    sessionHealth.consecutiveFails = 0;
+    sessionHealth.totalSent++;
+    // Reduce adaptive delay on success (min 0)
+    sessionHealth.adaptiveDelay = Math.max(0, sessionHealth.adaptiveDelay - 5000);
+  } else {
+    sessionHealth.consecutiveFails++;
+    sessionHealth.totalFailed++;
+    // Increase adaptive delay on failure (+10s per failure)
+    sessionHealth.adaptiveDelay = Math.min(60000, sessionHealth.adaptiveDelay + 10000);
+  }
+}
+
+function shouldAutoPause() {
+  // Check consecutive failures
+  if (sessionHealth.consecutiveFails >= sessionHealth.consecutiveFailMax) {
+    return { pause: true, reason: `${sessionHealth.consecutiveFails} consecutive failures detected — possible rate limit` };
+  }
+
+  // Check rolling window
+  if (sessionHealth.recentResults.length >= sessionHealth.windowSize) {
+    const failures = sessionHealth.recentResults.filter(r => !r).length;
+    if (failures >= sessionHealth.failThreshold) {
+      return { pause: true, reason: `${failures}/${sessionHealth.windowSize} recent attempts failed — possible rate limit or silent block` };
+    }
+  }
+
+  return { pause: false };
+}
+
 // ─── Cadence timer ───
 let cadenceTimerId = null;
 
@@ -191,12 +247,20 @@ const handlers = {
     boState.status = 'sending';
     boState.currentIndex = 0;
     boState.sentLog = [];
+    resetSessionHealth();
     runBulkOutreachLoop();
     return { success: true };
   },
 
   pauseBO: () => { boState.status = 'paused'; return { success: true }; },
-  resumeBO: () => { boState.status = 'sending'; runBulkOutreachLoop(); return { success: true }; },
+  resumeBO: () => { boState.status = 'sending'; sessionHealth.consecutiveFails = 0; runBulkOutreachLoop(); return { success: true }; },
+
+  getSessionHealth: () => ({
+    ...sessionHealth,
+    successRate: sessionHealth.totalSent + sessionHealth.totalFailed > 0
+      ? Math.round((sessionHealth.totalSent / (sessionHealth.totalSent + sessionHealth.totalFailed)) * 100)
+      : 100
+  }),
 
   resetBO: () => {
     boState.status = 'idle'; boState.outreachList = []; boState.sentLog = [];
@@ -403,9 +467,19 @@ async function runBulkOutreachLoop() {
         const typeResult = await sendToTab(boState.tabId, { action: 'typeAndSendDM', message: personalizedMsg });
         if (typeResult && typeResult.error) throw new Error(typeResult.error);
 
-        const doneMsg = didFollow ? 'Followed & DM sent!' : 'DM sent!';
-        broadcastBOProgress(user.username, 'done', doneMsg);
-        boState.sentLog.push({ username: user.username, status: 'success', message: doneMsg, timestamp: Date.now() });
+        // Check verification status from content script
+        if (typeResult && typeResult.warning) {
+          // Unverified send — possible silent block
+          const warnMsg = didFollow ? 'Followed & DM sent (unverified ⚠️)' : 'DM sent (unverified ⚠️)';
+          broadcastBOProgress(user.username, 'done-warning', warnMsg + ' — ' + typeResult.warning);
+          boState.sentLog.push({ username: user.username, status: 'success', message: warnMsg, timestamp: Date.now() });
+          recordHealthResult(false); // Count unverified as soft failure for health tracking
+        } else {
+          const doneMsg = didFollow ? 'Followed & DM sent!' : 'DM sent!';
+          broadcastBOProgress(user.username, 'done', doneMsg);
+          boState.sentLog.push({ username: user.username, status: 'success', message: doneMsg, timestamp: Date.now() });
+          recordHealthResult(true);
+        }
 
         await saveDMHistory({
           username: user.username,
@@ -512,8 +586,16 @@ async function runBulkOutreachLoop() {
             const typeResult = await sendToTab(boState.tabId, { action: 'typeAndSendDM', message: personalizedMsg });
             if (typeResult && typeResult.error) throw new Error(typeResult.error);
 
-            broadcastBOProgress(user.username, 'done', `Followed & DM sent to @${user.username}!`);
-            boState.sentLog.push({ username: user.username, status: 'success', message: 'Followed & DM sent', timestamp: Date.now() });
+            // Check verification status
+            if (typeResult && typeResult.warning) {
+              broadcastBOProgress(user.username, 'done-warning', `Followed & DM sent (unverified ⚠️) — ${typeResult.warning}`);
+              boState.sentLog.push({ username: user.username, status: 'success', message: 'Followed & DM sent (unverified)', timestamp: Date.now() });
+              recordHealthResult(false);
+            } else {
+              broadcastBOProgress(user.username, 'done', `Followed & DM sent to @${user.username}!`);
+              boState.sentLog.push({ username: user.username, status: 'success', message: 'Followed & DM sent', timestamp: Date.now() });
+              recordHealthResult(true);
+            }
 
             await saveDMHistory({
               username: user.username,
@@ -593,6 +675,9 @@ async function runBulkOutreachLoop() {
       broadcastBOProgress(user.username, 'error', `Error: ${err.message}`);
       boState.sentLog.push({ username: user.username, status: 'error', message: err.message, timestamp: Date.now() });
 
+      // Record failure in session health
+      recordHealthResult(false);
+
       await saveDMHistory({
         username: user.username,
         status: 'error',
@@ -607,9 +692,25 @@ async function runBulkOutreachLoop() {
 
     boState.currentIndex++;
 
+    // ── Session Health Check: Auto-pause if too many failures ──
+    if (boState.status === 'sending') {
+      const healthCheck = shouldAutoPause();
+      if (healthCheck.pause) {
+        boState.status = 'paused';
+        broadcastBOProgress('', 'health-pause', `⚠️ AUTO-PAUSED: ${healthCheck.reason}. Session health: ${sessionHealth.totalSent} sent, ${sessionHealth.totalFailed} failed. Wait a few minutes before resuming.`);
+        broadcastProgress({ step: 'boHealthPause', detail: healthCheck.reason, type: 'warning' });
+        return; // Exit loop — user must manually resume
+      }
+    }
+
     if (boState.status === 'sending' && boState.currentIndex < boState.outreachList.length) {
-      broadcastBOProgress('', 'waiting', `Waiting ${boState.delaySeconds}s before next user...`);
-      await delay(boState.delaySeconds * 1000, true, () => boState.status !== 'sending');
+      // Apply adaptive delay: base delay + extra delay from health degradation
+      const totalDelay = (boState.delaySeconds * 1000) + sessionHealth.adaptiveDelay;
+      const adaptiveNote = sessionHealth.adaptiveDelay > 0
+        ? ` (+${Math.round(sessionHealth.adaptiveDelay / 1000)}s adaptive)`
+        : '';
+      broadcastBOProgress('', 'waiting', `Waiting ${Math.round(totalDelay / 1000)}s before next user...${adaptiveNote}`);
+      await delay(totalDelay, true, () => boState.status !== 'sending');
     }
   }
 
@@ -617,8 +718,11 @@ async function runBulkOutreachLoop() {
     boState.status = 'done';
     const dmSent = boState.sentLog.filter(l => l.status === 'success').length;
     const waitlisted = boState.sentLog.filter(l => l.status === 'waitlisted').length;
+    const failed = boState.sentLog.filter(l => l.status === 'error').length;
     let summary = `All done! ${dmSent} DMs sent.`;
     if (waitlisted > 0) summary += ` ${waitlisted} added to waitlist.`;
+    if (failed > 0) summary += ` ${failed} failed.`;
+    summary += ` (Health: ${sessionHealth.totalSent}/${sessionHealth.totalSent + sessionHealth.totalFailed} success rate)`;
     broadcastProgress({ step: 'boDone', detail: summary, type: 'success' });
   }
 }

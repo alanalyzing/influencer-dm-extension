@@ -371,6 +371,9 @@
       return { error: 'Could not find message input box' };
     }
 
+    // Count existing message bubbles before sending (for post-send verification)
+    const bubbleCountBefore = countMessageBubbles();
+
     // Attempt up to 2 tries to type and send
     for (let attempt = 1; attempt <= 2; attempt++) {
       // Type the message
@@ -389,29 +392,93 @@
       await sendMessage(input);
       await sleep(2000);
 
-      // Verify message was sent (input should be empty after send)
+      // VERIFICATION LAYER 1: Check input is empty (text was consumed)
       const remaining = input.textContent || input.innerText || input.value || '';
-      if (remaining.trim().length === 0) {
-        return { success: true };
+      if (remaining.trim().length > 0) {
+        // Text still in input — send didn't fire
+        if (attempt === 2) {
+          // Last resort: try one more Enter key press
+          input.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+            shiftKey: false, bubbles: true, cancelable: true
+          }));
+          await sleep(1500);
+          const finalCheck = input.textContent || input.innerText || input.value || '';
+          if (finalCheck.trim().length > 0) {
+            return { error: 'Message typed but Send button did not respond', sendFailed: true };
+          }
+        } else {
+          await sleep(1000);
+          continue;
+        }
       }
 
-      // If text is still there, the send didn't work — retry on next attempt
+      // VERIFICATION LAYER 2: Check that a new message bubble appeared
+      await sleep(1000);
+      const bubbleCountAfter = countMessageBubbles();
+      if (bubbleCountAfter > bubbleCountBefore) {
+        // Confirmed: new message bubble appeared
+        return { success: true, verified: true };
+      }
+
+      // Bubble didn't appear — could be a silent failure or slow render
+      // Wait a bit more and check again
+      await sleep(2000);
+      const bubbleCountFinal = countMessageBubbles();
+      if (bubbleCountFinal > bubbleCountBefore) {
+        return { success: true, verified: true };
+      }
+
+      // Input is empty but no new bubble — possible silent block
       if (attempt === 2) {
-        // Last resort: try one more Enter key press
-        input.dispatchEvent(new KeyboardEvent('keydown', {
-          key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-          shiftKey: false, bubbles: true, cancelable: true
-        }));
-        await sleep(1500);
-        const finalCheck = input.textContent || input.innerText || input.value || '';
-        if (finalCheck.trim().length === 0) return { success: true };
-        return { error: 'Message typed but Send button did not respond' };
+        return { success: true, verified: false, warning: 'Input cleared but message bubble not detected — possible silent block' };
       }
 
       await sleep(1000);
     }
 
-    return { success: true };
+    return { success: true, verified: false };
+  }
+
+  /**
+   * Count message bubbles in the DM conversation.
+   * Instagram renders sent messages as div elements within the chat thread.
+   * We count elements that look like outgoing message containers.
+   */
+  function countMessageBubbles() {
+    let count = 0;
+
+    // Strategy 1: Look for message rows in the chat
+    // Instagram DM messages are typically in a scrollable container with role="row" or similar
+    const rows = document.querySelectorAll('div[role="row"], div[role="listitem"]');
+    if (rows.length > 0) return rows.length;
+
+    // Strategy 2: Look for message-like containers
+    // Sent messages often have a specific background color and are aligned right
+    const allDivs = document.querySelectorAll('div[dir="auto"]');
+    for (const div of allDivs) {
+      const style = window.getComputedStyle(div);
+      const parent = div.closest('[class]');
+      if (parent) {
+        const parentStyle = window.getComputedStyle(parent);
+        // Sent messages are typically in colored bubbles (blue/purple background)
+        if (parentStyle.backgroundColor && parentStyle.backgroundColor !== 'rgba(0, 0, 0, 0)' &&
+            parentStyle.backgroundColor !== 'rgb(255, 255, 255)' &&
+            parentStyle.backgroundColor !== 'transparent') {
+          count++;
+        }
+      }
+    }
+    if (count > 0) return count;
+
+    // Strategy 3: Count any text containers in the chat area that aren't the input
+    const chatContainer = document.querySelector('div[role="textbox"]')?.closest('div[style]')?.parentElement?.parentElement;
+    if (chatContainer) {
+      const spans = chatContainer.querySelectorAll('span[dir="auto"]');
+      return spans.length;
+    }
+
+    return 0;
   }
 
   async function findMessageInput(timeout) {
