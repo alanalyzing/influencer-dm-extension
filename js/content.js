@@ -365,19 +365,51 @@
   // ════════════════════════════════════════════════════════════
 
   async function handleTypeAndSendDM(message) {
-    // Find the message input
-    const input = await findMessageInput(12000);
+    // Find the message input — wait up to 15 seconds
+    const input = await findMessageInput(15000);
     if (!input) {
       return { error: 'Could not find message input box' };
     }
 
-    // Type the message
-    await typeIntoInput(input, message);
-    await sleep(800);
+    // Attempt up to 2 tries to type and send
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      // Type the message
+      await typeIntoInput(input, message);
+      await sleep(1000);
 
-    // Send the message
-    await sendMessage(input);
-    await sleep(1500);
+      // Verify text was actually entered
+      const typed = input.textContent || input.innerText || input.value || '';
+      if (typed.trim().length === 0) {
+        if (attempt === 2) return { error: 'Failed to type message into input (text not registered)' };
+        await sleep(1000);
+        continue;
+      }
+
+      // Send the message
+      await sendMessage(input);
+      await sleep(2000);
+
+      // Verify message was sent (input should be empty after send)
+      const remaining = input.textContent || input.innerText || input.value || '';
+      if (remaining.trim().length === 0) {
+        return { success: true };
+      }
+
+      // If text is still there, the send didn't work — retry on next attempt
+      if (attempt === 2) {
+        // Last resort: try one more Enter key press
+        input.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+          shiftKey: false, bubbles: true, cancelable: true
+        }));
+        await sleep(1500);
+        const finalCheck = input.textContent || input.innerText || input.value || '';
+        if (finalCheck.trim().length === 0) return { success: true };
+        return { error: 'Message typed but Send button did not respond' };
+      }
+
+      await sleep(1000);
+    }
 
     return { success: true };
   }
@@ -408,7 +440,7 @@
 
   async function typeIntoInput(input, message) {
     input.focus();
-    await sleep(200);
+    await sleep(300);
 
     if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
       const setter =
@@ -420,34 +452,165 @@
       input.dispatchEvent(new Event('change', { bubbles: true }));
     } else {
       // contenteditable / div[role="textbox"]
-      // First clear any existing content
+      // Clear existing content
       input.focus();
+      input.innerHTML = '';
       input.textContent = '';
-      await sleep(100);
+      await sleep(200);
 
-      // Use execCommand which triggers React's synthetic event system.
-      // Do NOT dispatch an additional InputEvent — that causes double insertion.
-      document.execCommand('insertText', false, message);
+      // Split message by line breaks and insert each line with Shift+Enter between them
+      const lines = message.split(/\n/);
+
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].length > 0) {
+          // Use execCommand to insert text — this triggers React's synthetic event system
+          document.execCommand('insertText', false, lines[i]);
+          await sleep(50);
+        }
+
+        // Insert line break between lines (not after the last line)
+        if (i < lines.length - 1) {
+          // Simulate Shift+Enter to create a line break in Instagram's input
+          input.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+            shiftKey: true, bubbles: true, cancelable: true
+          }));
+          // Also try inserting a <br> via execCommand as fallback
+          document.execCommand('insertLineBreak');
+          await sleep(50);
+        }
+      }
+
+      // Dispatch input event to ensure React picks up the change
+      input.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        cancelable: true,
+        inputType: 'insertText',
+        data: null
+      }));
+    }
+
+    // Wait and verify text was inserted
+    await sleep(500);
+    const content = input.textContent || input.innerText || input.value || '';
+    if (content.trim().length === 0) {
+      // Retry with clipboard paste approach
+      await retryWithClipboard(input, message);
+    }
+  }
+
+  async function retryWithClipboard(input, message) {
+    // Fallback: use clipboard API to paste the message
+    input.focus();
+    input.innerHTML = '';
+    await sleep(200);
+
+    try {
+      // Convert line breaks to actual line breaks for clipboard
+      const clipText = message;
+      await navigator.clipboard.writeText(clipText);
+      // Simulate Ctrl+V / Cmd+V paste
+      document.execCommand('paste');
+      await sleep(300);
+
+      // If paste didn't work, try DataTransfer approach
+      const content = input.textContent || input.innerText || '';
+      if (content.trim().length === 0) {
+        const dt = new DataTransfer();
+        dt.setData('text/plain', message);
+        input.dispatchEvent(new ClipboardEvent('paste', {
+          clipboardData: dt,
+          bubbles: true,
+          cancelable: true
+        }));
+        await sleep(300);
+      }
+    } catch (e) {
+      // Final fallback: set innerHTML directly with <br> for line breaks
+      const htmlContent = message
+        .split('\n')
+        .map(line => `<span>${line || '<br>'}</span>`)
+        .join('<br>');
+      input.innerHTML = htmlContent;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
     }
   }
 
   async function sendMessage(input) {
-    // Try Enter key
-    for (const eventType of ['keydown', 'keypress', 'keyup']) {
-      input.dispatchEvent(new KeyboardEvent(eventType, {
-        key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-        bubbles: true, cancelable: true
-      }));
+    // Strategy 1: Find and click the Send button directly
+    // Instagram's send button may be an SVG icon button without text
+    const sendBtn = findSendButton();
+    if (sendBtn) {
+      sendBtn.click();
+      await sleep(1000);
+      // Verify message was sent (input should be empty)
+      const remaining = input.textContent || input.innerText || input.value || '';
+      if (remaining.trim().length === 0) return;
     }
-    await sleep(800);
 
-    // Also try clicking Send button
+    // Strategy 2: Try Enter key (without Shift — Shift+Enter is line break)
+    input.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+      shiftKey: false, bubbles: true, cancelable: true
+    }));
+    await sleep(300);
+    input.dispatchEvent(new KeyboardEvent('keyup', {
+      key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+      shiftKey: false, bubbles: true, cancelable: true
+    }));
+    await sleep(1000);
+
+    // Strategy 3: If still not sent, try clicking send button again with broader search
+    const remaining = input.textContent || input.innerText || input.value || '';
+    if (remaining.trim().length > 0) {
+      const btn2 = findSendButton();
+      if (btn2) btn2.click();
+    }
+  }
+
+  function findSendButton() {
+    // Look for button with text "Send"
     for (const btn of document.querySelectorAll('button, div[role="button"]')) {
       const text = btn.textContent.trim().toLowerCase();
-      if (text === 'send') { btn.click(); return; }
-      const label = (btn.getAttribute('aria-label') || '').toLowerCase();
-      if (label.includes('send')) { btn.click(); return; }
+      if (text === 'send') return btn;
     }
+
+    // Look for button with aria-label containing "send"
+    for (const btn of document.querySelectorAll('button, div[role="button"]')) {
+      const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+      if (label.includes('send')) return btn;
+    }
+
+    // Look for SVG send icon button (paper plane icon near the input)
+    // Instagram's send button is usually the last button in the message form area
+    const messageForm = document.querySelector('div[role="textbox"]')?.closest('form') ||
+                        document.querySelector('div[role="textbox"]')?.closest('div[class]')?.parentElement;
+    if (messageForm) {
+      const buttons = messageForm.querySelectorAll('button, div[role="button"]');
+      for (const btn of buttons) {
+        // Send button often has an SVG with a specific path or is positioned after the input
+        if (btn.querySelector('svg') && !btn.querySelector('img')) {
+          const rect = btn.getBoundingClientRect();
+          const inputRect = document.querySelector('div[role="textbox"]')?.getBoundingClientRect();
+          if (inputRect && rect.left > inputRect.right - 100) {
+            return btn;
+          }
+        }
+      }
+    }
+
+    // Broadest search: any button with SVG that appears after the textbox
+    const textbox = document.querySelector('div[role="textbox"]');
+    if (textbox) {
+      let sibling = textbox.parentElement;
+      while (sibling) {
+        const btn = sibling.querySelector('button[type="submit"], button:last-of-type');
+        if (btn) return btn;
+        sibling = sibling.nextElementSibling;
+      }
+    }
+
+    return null;
   }
 
 })();
