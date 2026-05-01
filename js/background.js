@@ -523,7 +523,8 @@ async function runBulkOutreachLoop() {
           const warnMsg = didFollow ? 'Followed & DM sent (unverified ⚠️)' : 'DM sent (unverified ⚠️)';
           broadcastBOProgress(user.username, 'done-warning', warnMsg + ' — ' + typeResult.warning);
           boState.sentLog.push({ username: user.username, status: 'success', message: warnMsg, timestamp: Date.now() });
-          recordHealthResult(false); // Count unverified as soft failure for health tracking
+          // Unverified sends are likely successful — do NOT count as health failure
+          // Only true send failures (error thrown) should affect health
         } else {
           const doneMsg = didFollow ? 'Followed & DM sent!' : 'DM sent!';
           broadcastBOProgress(user.username, 'done', doneMsg);
@@ -696,7 +697,7 @@ async function runBulkOutreachLoop() {
             if (typeResult && typeResult.warning) {
               broadcastBOProgress(user.username, 'done-warning', `Followed & DM sent (unverified ⚠️) — ${typeResult.warning}`);
               boState.sentLog.push({ username: user.username, status: 'success', message: 'Followed & DM sent (unverified)', timestamp: Date.now() });
-              recordHealthResult(false);
+              // Unverified sends are likely successful — do NOT count as health failure
             } else {
               broadcastBOProgress(user.username, 'done', `Followed & DM sent to @${user.username}!`);
               boState.sentLog.push({ username: user.username, status: 'success', message: 'Followed & DM sent', timestamp: Date.now() });
@@ -814,7 +815,8 @@ async function runBulkOutreachLoop() {
       const healthCheck = shouldAutoPause();
       if (healthCheck.pause) {
         boState.status = 'paused';
-        broadcastBOProgress('', 'health-pause', `⚠️ AUTO-PAUSED: ${healthCheck.reason}. Session health: ${sessionHealth.totalSent} sent, ${sessionHealth.totalFailed} failed. Wait a few minutes before resuming.`);
+        const lastErrors = boState.sentLog.slice(-3).filter(l => l.status === 'error').map(l => l.message).join('; ');
+        broadcastBOProgress('', 'health-pause', `⚠️ AUTO-PAUSED: ${healthCheck.reason}. Last errors: ${lastErrors || 'none logged'}. Session: ${sessionHealth.totalSent} sent, ${sessionHealth.totalFailed} failed. Resume to continue.`);
         broadcastProgress({ step: 'boHealthPause', detail: healthCheck.reason, type: 'warning' });
         return; // Exit loop — user must manually resume
       }
