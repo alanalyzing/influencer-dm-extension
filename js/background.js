@@ -217,7 +217,13 @@ const handlers = {
   },
 
   pauseDMs: () => { state.status = 'paused'; return { success: true }; },
-  resumeDMs: () => { state.status = 'sending'; runDMLoop(); return { success: true }; },
+  resumeDMs: () => {
+    state.status = 'sending';
+    sessionHealth.consecutiveFails = 0;
+    sessionHealth.recentResults = [];
+    runDMLoop();
+    return { success: true };
+  },
 
   reset: () => {
     state.status = 'idle'; state.matchedUsers = []; state.selectedUsers = [];
@@ -253,7 +259,15 @@ const handlers = {
   },
 
   pauseBO: () => { boState.status = 'paused'; return { success: true }; },
-  resumeBO: () => { boState.status = 'sending'; sessionHealth.consecutiveFails = 0; runBulkOutreachLoop(); return { success: true }; },
+  resumeBO: () => {
+    boState.status = 'sending';
+    // Reset health tracking on resume so old failures don't immediately re-trigger pause
+    sessionHealth.consecutiveFails = 0;
+    sessionHealth.recentResults = [];
+    sessionHealth.adaptiveDelay = Math.max(0, sessionHealth.adaptiveDelay - 15000); // Reduce adaptive delay on resume
+    runBulkOutreachLoop();
+    return { success: true };
+  },
 
   getSessionHealth: () => ({
     ...sessionHealth,
