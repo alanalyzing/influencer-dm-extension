@@ -4,6 +4,43 @@
 
 ---
 
+## What's New in v9
+
+### No More Auto-Pause — Skip + Waitlist on Failure
+
+The automation **never pauses on its own** anymore. Previously, consecutive DM failures would trigger an auto-pause that required manual intervention to resume. Now the behavior is:
+
+| Event | Old Behavior (v8) | New Behavior (v9) |
+|-------|-------------------|-------------------|
+| DM send fails | Count as health failure → auto-pause after 3 | Skip user, add to waitlist, continue |
+| Private profile | Skip or waitlist (fixed in v8) | Same — no impact on flow |
+| Follow error | Skip (fixed in v8) | Same — no impact on flow |
+| Unverified send | Logged as warning | Same — no impact on flow |
+
+**On any failure, the extension now:**
+1. Logs the error in the progress feed
+2. Adds the user to the **waitlist** with status "Error" for later retry via Re-check
+3. Saves to history as an error
+4. Waits the normal configured delay
+5. **Continues to the next user automatically**
+
+You can still manually pause at any time, but the extension will never stop on its own.
+
+### Simplified Delay
+
+Removed the adaptive delay system that would slow down the extension on errors. The delay between users is now always exactly what you configure — no hidden additions.
+
+### Improved End Summary
+
+When outreach completes, the summary now shows a clear breakdown:
+> "All done! 45 DMs sent. 3 waitlisted. 2 failed (added to waitlist for retry). 5 skipped."
+
+### Failed Users Go to Waitlist
+
+Users that fail for any reason (message input not found, send button error, page load timeout, etc.) are automatically added to the waitlist. You can retry them later using the **Re-check** button on the Waitlist tab, which will revisit their profiles and attempt to send the DM again.
+
+---
+
 ## What's New in v8
 
 ### Skip Private Profiles Toggle

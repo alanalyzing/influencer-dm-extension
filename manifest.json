@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Influencer DM Manager",
-  "version": "8.0.0",
+  "version": "9.0.0",
   "description": "Instagram & Threads influencer engagement manager. Skip private profiles, deduplication, dashboard analytics, CSV import/export, bulk outreach, keyword-scan, DM templates, session health, cadence follow-ups, and waitlist.",
   "permissions": [
     "activeTab",
