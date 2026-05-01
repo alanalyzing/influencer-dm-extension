@@ -413,6 +413,10 @@
         }
       }
 
+      // ─── Input was cleared = message was sent. DO NOT retry from here. ───
+      // Even if bubble verification fails, the message was consumed by Instagram.
+      // Retrying would send a DUPLICATE message.
+
       // VERIFICATION LAYER 2: Check that a new message bubble appeared
       await sleep(1000);
       const bubbleCountAfter = countMessageBubbles();
@@ -421,20 +425,16 @@
         return { success: true, verified: true };
       }
 
-      // Bubble didn't appear — could be a silent failure or slow render
-      // Wait a bit more and check again
+      // Bubble didn't appear — could be slow render, wait more
       await sleep(2000);
       const bubbleCountFinal = countMessageBubbles();
       if (bubbleCountFinal > bubbleCountBefore) {
         return { success: true, verified: true };
       }
 
-      // Input is empty but no new bubble — possible silent block
-      if (attempt === 2) {
-        return { success: true, verified: false, warning: 'Input cleared but message bubble not detected — possible silent block' };
-      }
-
-      await sleep(1000);
+      // Input is empty but no new bubble — message was sent but bubble not detected.
+      // DO NOT retry — return as unverified success to avoid duplicate sends.
+      return { success: true, verified: false, warning: 'Input cleared but message bubble not detected — possible silent block or slow render' };
     }
 
     return { success: true, verified: false };

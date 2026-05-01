@@ -318,6 +318,16 @@ async function runDMLoop() {
     state.currentDMUser = user.username;
 
     try {
+      // ── DEDUPLICATION CHECK: Skip if already messaged ──
+      const alreadySent = await isAlreadyMessaged(user.username);
+      if (alreadySent) {
+        const skipMsg = `Skipped @${user.username} — already messaged previously`;
+        broadcastDMProgress(user.username, 'done', skipMsg);
+        state.sentLog.push({ username: user.username, status: 'skipped-dup', message: skipMsg, timestamp: Date.now(), viewed: false, followed: false, platform: state.platform });
+        state.currentIndex++;
+        continue;
+      }
+
       // Always navigate to Instagram profile for DMs (even if scan was on Threads)
       state.currentDMStep = 'navigating';
       broadcastDMProgress(user.username, 'navigating', `Opening @${user.username}'s profile...`);
@@ -418,6 +428,16 @@ async function runBulkOutreachLoop() {
     const personalizedMsg = (user.dmTemplate || '').replace(/\{\{username\}\}/gi, user.username);
 
     try {
+      // ── DEDUPLICATION CHECK: Skip if already messaged ──
+      const alreadySent = await isAlreadyMessaged(user.username);
+      if (alreadySent) {
+        const skipMsg = `Skipped @${user.username} — already messaged previously`;
+        broadcastBOProgress(user.username, 'done', skipMsg);
+        boState.sentLog.push({ username: user.username, status: 'skipped-dup', message: skipMsg, timestamp: Date.now() });
+        boState.currentIndex++;
+        continue;
+      }
+
       // Step 1: Navigate to profile on the selected platform
       broadcastBOProgress(user.username, 'checking', `Opening @${user.username}'s profile...`);
       const pUrl = profileUrl(user.username, platform);
@@ -793,6 +813,13 @@ async function processCadenceQueue() {
     const personalizedMsg = (item.dmTemplate || '').replace(/\{\{username\}\}/gi, item.username);
 
     try {
+      // DEDUPLICATION: Check if this specific cadence step was already sent
+      const alreadySentCadence = await isCadenceAlreadySent(item.username, item.cadenceHours);
+      if (alreadySentCadence) {
+        item.status = 'skipped-dup';
+        continue;
+      }
+
       // Cadence DMs always go through Instagram
       await chrome.tabs.update(tab.id, { url: dmProfileUrl(item.username) });
       await waitForTabLoad(tab.id);
@@ -878,31 +905,39 @@ async function runWaitlistRecheck(waitlist, platform) {
       const profileCheck = await sendToTab(boState.tabId, { action: 'checkProfileActions' });
 
       if (profileCheck && profileCheck.hasMessage) {
-        broadcastWaitlistProgress(user.username, 'checking', `Message button found — sending DM...`, i, waitlist.length, results);
+        // DEDUPLICATION: Check if already messaged before sending
+        const alreadySent = await isAlreadyMessaged(user.username);
+        if (alreadySent) {
+          broadcastWaitlistProgress(user.username, 'dm-sent', `@${user.username} already messaged — skipping`, i, waitlist.length, results);
+          results.push({ username: user.username, status: 'dm-sent' });
+          // Remove from waitlist since already handled
+        } else {
+          broadcastWaitlistProgress(user.username, 'checking', `Message button found — sending DM...`, i, waitlist.length, results);
 
-        const clickResult = await sendToTab(boState.tabId, { action: 'clickMessageButton' });
-        if (clickResult && clickResult.error) throw new Error(clickResult.error);
+          const clickResult = await sendToTab(boState.tabId, { action: 'clickMessageButton' });
+          if (clickResult && clickResult.error) throw new Error(clickResult.error);
 
-        await delay(3000);
-        await injectContentScript(boState.tabId, 'instagram');
-        await delay(1000);
+          await delay(3000);
+          await injectContentScript(boState.tabId, 'instagram');
+          await delay(1000);
 
-        const typeResult = await sendToTab(boState.tabId, { action: 'typeAndSendDM', message: personalizedMsg });
-        if (typeResult && typeResult.error) throw new Error(typeResult.error);
+          const typeResult = await sendToTab(boState.tabId, { action: 'typeAndSendDM', message: personalizedMsg });
+          if (typeResult && typeResult.error) throw new Error(typeResult.error);
 
-        broadcastWaitlistProgress(user.username, 'dm-sent', `DM sent to @${user.username}!`, i, waitlist.length, results);
-        results.push({ username: user.username, status: 'dm-sent' });
+          broadcastWaitlistProgress(user.username, 'dm-sent', `DM sent to @${user.username}!`, i, waitlist.length, results);
+          results.push({ username: user.username, status: 'dm-sent' });
 
-        await saveDMHistory({
-          username: user.username,
-          status: 'messaged',
-          message: `DM sent (waitlist re-check, ${user.templateName})`,
-          templateName: user.templateName,
-          timestamp: Date.now(),
-          viewed: true,
-          followed: true,
-          platform: userPlatform
-        });
+          await saveDMHistory({
+            username: user.username,
+            status: 'messaged',
+            message: `DM sent (waitlist re-check, ${user.templateName})`,
+            templateName: user.templateName,
+            timestamp: Date.now(),
+            viewed: true,
+            followed: true,
+            platform: userPlatform
+          });
+        }
 
       } else {
         broadcastWaitlistProgress(user.username, 'still-waiting', `@${user.username} — still no Message button`, i, waitlist.length, results);
@@ -1052,4 +1087,34 @@ async function saveToWaitlist(entry) {
     waitlist.push(entry);
     await chrome.storage.local.set({ boWaitlist: waitlist });
   }
+}
+
+/**
+ * DEDUPLICATION: Check if a user has already been successfully messaged.
+ * Returns true if dmHistory contains a 'messaged' entry for this username
+ * (excluding cadence steps, which are separate follow-ups).
+ */
+async function isAlreadyMessaged(username) {
+  const data = await chrome.storage.local.get('dmHistory');
+  const history = data.dmHistory || [];
+  return history.some(h =>
+    h.username === username &&
+    h.status === 'messaged' &&
+    !h.cadenceStep
+  );
+}
+
+/**
+ * DEDUPLICATION: Check if a specific cadence step was already sent to a user.
+ * Returns true if dmHistory contains a 'messaged' entry for this username
+ * with the matching cadenceStep value.
+ */
+async function isCadenceAlreadySent(username, cadenceHours) {
+  const data = await chrome.storage.local.get('dmHistory');
+  const history = data.dmHistory || [];
+  return history.some(h =>
+    h.username === username &&
+    h.status === 'messaged' &&
+    h.cadenceStep === cadenceHours
+  );
 }
