@@ -48,10 +48,10 @@ let boState = {
 // ─── Session Health Monitor ───
 let sessionHealth = {
   recentResults: [],   // Last N results: true = success, false = failure
-  windowSize: 5,       // Track last 5 attempts
-  failThreshold: 3,    // Auto-pause if 3 of last 5 fail
-  consecutiveFails: 0, // Track consecutive failures
-  consecutiveFailMax: 2, // Auto-pause after 2 consecutive failures
+  windowSize: 5,       // Track last 5 DM send attempts
+  failThreshold: 4,    // Auto-pause if 4 of last 5 DM sends fail
+  consecutiveFails: 0, // Track consecutive DM send failures
+  consecutiveFailMax: 3, // Auto-pause after 3 consecutive DM send failures
   totalSent: 0,
   totalFailed: 0,
   adaptiveDelay: 0     // Extra delay added when health degrades
@@ -517,11 +517,67 @@ async function runBulkOutreachLoop() {
           await scheduleCadenceFollowUps(user, boState.cadenceConfig);
         }
 
+      } else if (profileCheck && profileCheck.isRequested) {
+        // ── Already requested (private account from previous run) — skip gracefully ──
+        if (settings.waitlistPrivate) {
+          await saveToWaitlist({
+            username: user.username,
+            templateId: user.templateId,
+            templateName: user.templateName,
+            dmTemplate: user.dmTemplate,
+            followStatus: 'Requested',
+            alreadyFollowing: true,
+            timestamp: new Date().toISOString(),
+            platform
+          });
+          const statusMsg = `@${user.username} already requested (private) — added to waitlist`;
+          broadcastBOProgress(user.username, 'waitlisted', statusMsg);
+          boState.sentLog.push({ username: user.username, status: 'waitlisted', message: statusMsg, timestamp: Date.now() });
+          await saveDMHistory({
+            username: user.username, status: 'requested', message: statusMsg,
+            templateName: user.templateName, timestamp: Date.now(),
+            viewed: true, followed: true, platform
+          });
+        } else {
+          const statusMsg = `@${user.username} already requested (private) — skipped`;
+          broadcastBOProgress(user.username, 'skipped', statusMsg);
+          boState.sentLog.push({ username: user.username, status: 'skipped', message: statusMsg, timestamp: Date.now() });
+        }
+        // Do NOT record as health failure — this is expected behavior
+
       } else {
         // ── No Message button — need to Follow first ──
         broadcastBOProgress(user.username, 'following', 'No Message button — following...');
 
         const followResult = await sendToTab(boState.tabId, { action: 'clickFollowButton' });
+
+        // Handle follow button errors gracefully (private profile edge cases)
+        if (followResult && followResult.error) {
+          // No follow button found — likely a private profile with unusual layout
+          // or already-requested state not detected by checkProfileActions
+          const statusMsg = `@${user.username} — could not follow (${followResult.error}), added to waitlist`;
+          broadcastBOProgress(user.username, 'waitlisted', statusMsg);
+          boState.sentLog.push({ username: user.username, status: 'waitlisted', message: statusMsg, timestamp: Date.now() });
+          await saveToWaitlist({
+            username: user.username, templateId: user.templateId,
+            templateName: user.templateName, dmTemplate: user.dmTemplate,
+            followStatus: 'Unknown', alreadyFollowing: false,
+            timestamp: new Date().toISOString(), platform
+          });
+          await saveDMHistory({
+            username: user.username, status: 'error', message: statusMsg,
+            templateName: user.templateName, timestamp: Date.now(),
+            viewed: true, followed: false, platform
+          });
+          // Do NOT record as health failure — move to next user
+          boState.currentIndex++;
+          if (boState.status === 'sending' && boState.currentIndex < boState.outreachList.length) {
+            broadcastBOProgress('', 'waiting', `Waiting ${boState.delaySeconds}s before next user...`);
+            await delay(boState.delaySeconds * 1000, true, () => boState.status !== 'sending');
+          }
+          continue;
+        }
+
         const followStatus = followResult?.status || 'unknown';
         const alreadyFollowing = followResult?.alreadyFollowing || false;
 
@@ -695,8 +751,19 @@ async function runBulkOutreachLoop() {
       broadcastBOProgress(user.username, 'error', `Error: ${err.message}`);
       boState.sentLog.push({ username: user.username, status: 'error', message: err.message, timestamp: Date.now() });
 
-      // Record failure in session health
-      recordHealthResult(false);
+      // Only count DM-related errors as health failures.
+      // Profile/follow errors (e.g., private accounts, no follow button) should NOT
+      // trigger auto-pause since they are expected for private profiles.
+      const isDMError = err.message && (
+        err.message.includes('message input') ||
+        err.message.includes('Send button') ||
+        err.message.includes('DM') ||
+        err.message.includes('typing') ||
+        err.message.includes('sendFailed')
+      );
+      if (isDMError) {
+        recordHealthResult(false);
+      }
 
       await saveDMHistory({
         username: user.username,
