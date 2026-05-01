@@ -32,9 +32,25 @@ The dashboard auto-refreshes whenever outreach progress or history updates are r
 
 **Export History** — On the History sub-tab, export your full outreach history as a CSV with columns: `username`, `platform`, `status`, `viewed`, `followed`, `messaged`, `templateName`, `timestamp`, `message`, `cadenceStep`.
 
+### DM Reliability & Send Rate Improvements
+
+Significant improvements to DM delivery success rate:
+
+- **Post-send bubble verification** — After sending each DM, the extension counts message bubbles before and after to confirm delivery actually occurred. If verification fails, it retries automatically.
+- **Session health monitoring** — Tracks a rolling window of the last 5 send attempts. Auto-pauses outreach on 2 consecutive failures or 3 out of 5 failures to protect your account.
+- **Adaptive delay** — Automatically increases delay by 10s per failure and decreases by 5s per success, dynamically adjusting to Instagram's rate limits.
+- **Default delay set to 60s** — With a visible warning if you set it below 60s to reduce risk of action blocks.
+- **Configurable behavior settings** — Always follow before DM, DM after follow for public accounts, waitlist private accounts (all toggleable).
+
+### Line Break Preservation in DMs
+
+DM templates now fully preserve line breaks. The extension uses **Shift+Enter simulation** to insert line breaks in Instagram's contenteditable input, so multi-paragraph messages render exactly as written in your template.
+
 ### Other v7 Improvements
 - Dashboard is now the **default active sub-tab** in Bulk Outreach (before Outreach, History, Waitlist, Templates)
 - Sub-tab order: Dashboard → Outreach → History → Waitlist → Templates
+- Pause takes effect **immediately** after current task completes (not after full delay)
+- Back to Config button appears when paused for easy reconfiguration
 
 ---
 
