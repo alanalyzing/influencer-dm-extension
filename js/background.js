@@ -779,22 +779,22 @@ async function runBulkOutreachLoop() {
       }
 
     } catch (err) {
-      broadcastBOProgress(user.username, 'error', `Error: ${err.message}`);
+      // On any error: skip this user, add to waitlist, continue to next
+      const errMsg = `Error with @${user.username}: ${err.message} — skipped, added to waitlist`;
+      broadcastBOProgress(user.username, 'error', errMsg);
       boState.sentLog.push({ username: user.username, status: 'error', message: err.message, timestamp: Date.now() });
 
-      // Only count DM-related errors as health failures.
-      // Profile/follow errors (e.g., private accounts, no follow button) should NOT
-      // trigger auto-pause since they are expected for private profiles.
-      const isDMError = err.message && (
-        err.message.includes('message input') ||
-        err.message.includes('Send button') ||
-        err.message.includes('DM') ||
-        err.message.includes('typing') ||
-        err.message.includes('sendFailed')
-      );
-      if (isDMError) {
-        recordHealthResult(false);
-      }
+      // Add failed user to waitlist so they can be retried later
+      await saveToWaitlist({
+        username: user.username,
+        templateId: user.templateId,
+        templateName: user.templateName,
+        dmTemplate: user.dmTemplate,
+        followStatus: 'Error',
+        alreadyFollowing: false,
+        timestamp: new Date().toISOString(),
+        platform
+      });
 
       await saveDMHistory({
         username: user.username,
@@ -810,25 +810,11 @@ async function runBulkOutreachLoop() {
 
     boState.currentIndex++;
 
-    // ── Session Health Check: Auto-pause if too many failures ──
-    if (boState.status === 'sending') {
-      const healthCheck = shouldAutoPause();
-      if (healthCheck.pause) {
-        boState.status = 'paused';
-        const lastErrors = boState.sentLog.slice(-3).filter(l => l.status === 'error').map(l => l.message).join('; ');
-        broadcastBOProgress('', 'health-pause', `⚠️ AUTO-PAUSED: ${healthCheck.reason}. Last errors: ${lastErrors || 'none logged'}. Session: ${sessionHealth.totalSent} sent, ${sessionHealth.totalFailed} failed. Resume to continue.`);
-        broadcastProgress({ step: 'boHealthPause', detail: healthCheck.reason, type: 'warning' });
-        return; // Exit loop — user must manually resume
-      }
-    }
+    // No auto-pause — always continue to next user
 
     if (boState.status === 'sending' && boState.currentIndex < boState.outreachList.length) {
-      // Apply adaptive delay: base delay + extra delay from health degradation
-      const totalDelay = (boState.delaySeconds * 1000) + sessionHealth.adaptiveDelay;
-      const adaptiveNote = sessionHealth.adaptiveDelay > 0
-        ? ` (+${Math.round(sessionHealth.adaptiveDelay / 1000)}s adaptive)`
-        : '';
-      broadcastBOProgress('', 'waiting', `Waiting ${Math.round(totalDelay / 1000)}s before next user...${adaptiveNote}`);
+      const totalDelay = boState.delaySeconds * 1000;
+      broadcastBOProgress('', 'waiting', `Waiting ${boState.delaySeconds}s before next user...`);
       await delay(totalDelay, true, () => boState.status !== 'sending');
     }
   }
@@ -838,10 +824,11 @@ async function runBulkOutreachLoop() {
     const dmSent = boState.sentLog.filter(l => l.status === 'success').length;
     const waitlisted = boState.sentLog.filter(l => l.status === 'waitlisted').length;
     const failed = boState.sentLog.filter(l => l.status === 'error').length;
+    const skipped = boState.sentLog.filter(l => l.status === 'skipped' || l.status === 'skipped-dup').length;
     let summary = `All done! ${dmSent} DMs sent.`;
-    if (waitlisted > 0) summary += ` ${waitlisted} added to waitlist.`;
-    if (failed > 0) summary += ` ${failed} failed.`;
-    summary += ` (Health: ${sessionHealth.totalSent}/${sessionHealth.totalSent + sessionHealth.totalFailed} success rate)`;
+    if (waitlisted > 0) summary += ` ${waitlisted} waitlisted.`;
+    if (failed > 0) summary += ` ${failed} failed (added to waitlist for retry).`;
+    if (skipped > 0) summary += ` ${skipped} skipped.`;
     broadcastProgress({ step: 'boDone', detail: summary, type: 'success' });
   }
 }
