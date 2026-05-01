@@ -152,6 +152,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const settingAlwaysFollow = $('settingAlwaysFollow');
   const settingDMAfterFollow = $('settingDMAfterFollow');
   const settingWaitlistPrivate = $('settingWaitlistPrivate');
+  const settingSkipPrivate = $('settingSkipPrivate');
 
   // ─── State ───
   let currentStep = 1;
@@ -832,7 +833,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const behaviorSettings = {
       alwaysFollow: settingAlwaysFollow?.checked ?? true,
       dmAfterFollow: settingDMAfterFollow?.checked ?? true,
-      waitlistPrivate: settingWaitlistPrivate?.checked ?? true
+      waitlistPrivate: settingWaitlistPrivate?.checked ?? true,
+      skipPrivate: settingSkipPrivate?.checked ?? false
     };
 
     await bg({ action: 'startBulkOutreach', outreachList, delaySeconds: delaySec, cadenceConfig, platform: currentPlatform, behaviorSettings });

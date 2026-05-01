@@ -42,7 +42,7 @@ let boState = {
   tabId: null,
   cadenceConfig: null,
   platform: 'instagram',
-  behaviorSettings: { alwaysFollow: true, dmAfterFollow: true, waitlistPrivate: true }
+  behaviorSettings: { alwaysFollow: true, dmAfterFollow: true, waitlistPrivate: true, skipPrivate: false }
 };
 
 // ─── Session Health Monitor ───
@@ -450,6 +450,22 @@ async function runBulkOutreachLoop() {
       await delay(500);
 
       const profileCheck = await sendToTab(boState.tabId, { action: 'checkProfileActions' });
+
+      // ── SKIP PRIVATE PROFILES: Detect private accounts before any action ──
+      if (settings.skipPrivate && profileCheck && !profileCheck.hasMessage) {
+        const privacyCheck = await sendToTab(boState.tabId, { action: 'checkIfPrivate' });
+        if (privacyCheck && privacyCheck.isPrivate) {
+          const skipMsg = `Skipped @${user.username} — private profile`;
+          broadcastBOProgress(user.username, 'skipped', skipMsg);
+          boState.sentLog.push({ username: user.username, status: 'skipped', message: skipMsg, timestamp: Date.now() });
+          boState.currentIndex++;
+          if (boState.status === 'sending' && boState.currentIndex < boState.outreachList.length) {
+            broadcastBOProgress('', 'waiting', `Waiting ${boState.delaySeconds}s before next user...`);
+            await delay(boState.delaySeconds * 1000, true, () => boState.status !== 'sending');
+          }
+          continue;
+        }
+      }
 
       if (profileCheck && profileCheck.hasMessage) {
         // ── Message button visible path ──

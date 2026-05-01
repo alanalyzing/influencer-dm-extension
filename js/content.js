@@ -35,6 +35,7 @@
       clickMessageButton: () => handleClickMessageButton(),
       clickFollowButton: () => handleClickFollowButton(),
       checkProfileActions: () => handleCheckProfileActions(),
+      checkIfPrivate: () => handleCheckIfPrivate(),
       checkForMessageButton: () => handleCheckForMessageButton(),
       typeAndSendDM: () => handleTypeAndSendDM(msg.message),
       ping: () => Promise.resolve({ pong: true })
@@ -329,6 +330,67 @@
       await sleep(500);
     }
     return { found: false };
+  }
+
+  // ════════════════════════════════════════════════════════════
+  //  ACTION: CHECK IF PROFILE IS PRIVATE
+  // ════════════════════════════════════════════════════════════
+
+  async function handleCheckIfPrivate() {
+    // Instagram private profile indicators:
+    // 1. "This account is private" text on the page
+    // 2. "This Account is Private" heading
+    // 3. Lock icon + "Private Account" text
+    // 4. No posts visible + follow button present
+    // 5. Profile shows 0 posts grid but has follower count
+
+    const pageText = document.body.innerText || '';
+
+    // Check for explicit private account text
+    const privateIndicators = [
+      'This account is private',
+      'This Account is Private',
+      'Follow this account to see their photos and videos',
+      'follow this account to see their photos',
+      'This is a private account'
+    ];
+
+    for (const indicator of privateIndicators) {
+      if (pageText.includes(indicator)) {
+        return { isPrivate: true, reason: indicator };
+      }
+    }
+
+    // Check for the private lock icon (Instagram uses a specific SVG or text)
+    const headings = document.querySelectorAll('h2, span[class]');
+    for (const h of headings) {
+      const text = h.textContent.trim().toLowerCase();
+      if (text.includes('private') && text.includes('account')) {
+        return { isPrivate: true, reason: 'Private account heading detected' };
+      }
+    }
+
+    // Additional check: if there's no posts grid visible and no Message button,
+    // it's likely private (but we can't be 100% sure)
+    const articles = document.querySelectorAll('article');
+    const postLinks = document.querySelectorAll('a[href*="/p/"]');
+    const hasNoPosts = articles.length === 0 && postLinks.length === 0;
+
+    // Check if there's a Follow button (not Following/Requested)
+    let hasFollowBtn = false;
+    for (const el of document.querySelectorAll('div[role="button"], button')) {
+      if (el.textContent.trim() === 'Follow') {
+        hasFollowBtn = true;
+        break;
+      }
+    }
+
+    // If no posts visible + follow button present = likely private
+    if (hasNoPosts && hasFollowBtn) {
+      return { isPrivate: true, reason: 'No posts visible + Follow button present' };
+    }
+
+    return { isPrivate: false };
   }
 
   // ════════════════════════════════════════════════════════════

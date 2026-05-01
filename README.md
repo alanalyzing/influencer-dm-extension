@@ -4,6 +4,47 @@
 
 ---
 
+## What's New in v8
+
+### Skip Private Profiles Toggle
+
+New **"Skip private profiles entirely"** behavior setting that detects private accounts **before** sending a follow request and skips them completely — no follow, no waitlist, just moves to the next user.
+
+**How it works:**
+- After navigating to a profile, the extension checks for private account indicators:
+  - "This account is private" text on the page
+  - No posts visible + Follow button present
+  - Private account headings or lock icons
+- If private is detected and the toggle is enabled, the user is skipped instantly
+- No follow request is sent, keeping your account's follow activity clean
+
+**Toggle location:** Behavior Settings → "Skip private profiles entirely" (unchecked by default)
+
+### Duplicate Message Prevention
+
+Multi-level deduplication system prevents the same user from receiving the same message twice:
+
+| Layer | What it prevents |
+|-------|------------------|
+| **Pre-send history check** | Re-running outreach with same handles won't re-send |
+| **Retry loop guard** | If input was cleared (message sent), never retry |
+| **Cadence step check** | Same follow-up step can't fire twice |
+| **Cross-queue dedup** | Users in both waitlist and cadence won't get double messages |
+
+Skipped users show as "skipped-dup" in the progress log.
+
+### Private Profile Handling Fix
+
+Private profiles no longer trigger auto-pause. Previously, encountering 2 private profiles in a row would pause the entire automation. Now:
+
+- Profile/follow errors are **not** counted as health failures
+- Only actual DM delivery failures affect session health
+- "Already Requested" profiles are detected early and handled gracefully
+- `clickFollowButton` errors are caught inline (waitlist + continue) instead of throwing
+- Health thresholds relaxed: consecutive fail max 2→3, rolling window 3/5→4/5
+
+---
+
 ## What's New in v7
 
 ### Dashboard Analytics
