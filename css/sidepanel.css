@@ -1422,3 +1422,227 @@ body.platform-threads .header {
   padding: 0 4px;
   margin-left: 2px;
 }
+
+/* ═══════════════════════════════════════════
+   DASHBOARD
+   ═══════════════════════════════════════════ */
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.stat-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 14px 12px;
+  text-align: center;
+  box-shadow: var(--shadow-sm);
+}
+
+.stat-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--primary);
+  line-height: 1.2;
+}
+
+.stat-card:nth-child(3) .stat-value { color: var(--success); }
+.stat-card:nth-child(4) .stat-value { color: var(--warning); }
+
+.stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.chart-section {
+  margin-bottom: 16px;
+  padding: 12px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+}
+
+.chart-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+
+/* Bar Chart (7-day activity) */
+.bar-chart {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  height: 80px;
+  gap: 4px;
+  padding-top: 4px;
+}
+
+.bar-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  height: 100%;
+  justify-content: flex-end;
+}
+
+.bar-fill {
+  width: 100%;
+  max-width: 24px;
+  background: var(--ig-gradient);
+  border-radius: 4px 4px 0 0;
+  min-height: 2px;
+  transition: height 0.3s ease;
+}
+
+.bar-label {
+  font-size: 9px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.bar-count {
+  font-size: 9px;
+  color: var(--text);
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+/* Horizontal Bars (outcome breakdown) */
+.horizontal-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.h-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.h-bar-label {
+  font-size: 11px;
+  color: var(--text);
+  width: 70px;
+  flex-shrink: 0;
+}
+
+.h-bar-track {
+  flex: 1;
+  height: 14px;
+  background: var(--border-light);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.h-bar-fill {
+  height: 100%;
+  border-radius: 7px;
+  transition: width 0.4s ease;
+}
+
+.h-bar-fill.messaged { background: var(--success); }
+.h-bar-fill.followed { background: var(--warning); }
+.h-bar-fill.error { background: var(--error); }
+.h-bar-fill.waitlisted { background: var(--primary); }
+
+.h-bar-value {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  width: 28px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* Health Display */
+.health-display {
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-light);
+}
+
+.health-status {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.health-status.good { color: var(--success); }
+.health-status.warning { color: var(--warning); }
+.health-status.bad { color: var(--error); }
+
+.health-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.health-bar-track {
+  flex: 1;
+  height: 6px;
+  background: var(--border-light);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.health-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease, background 0.3s ease;
+}
+
+.health-bar-pct {
+  font-size: 11px;
+  font-weight: 700;
+  min-width: 32px;
+  text-align: right;
+}
+
+/* ═══════════════════════════════════════════
+   CSV IMPORT/EXPORT
+   ═══════════════════════════════════════════ */
+
+.csv-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.csv-btns {
+  display: flex;
+  gap: 6px;
+}
+
+.btn-csv {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-csv:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-light);
+}
+
+.btn-csv svg { flex-shrink: 0; }

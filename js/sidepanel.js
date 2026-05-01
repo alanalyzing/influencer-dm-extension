@@ -63,11 +63,27 @@ document.addEventListener('DOMContentLoaded', async () => {
   // ─── DOM refs: Bulk Outreach ───
   const subTabs          = document.querySelectorAll('.sub-tab');
   const subPanels        = {
+    'bo-dashboard': $('bo-dashboard'),
     'bo-outreach': $('bo-outreach'),
     'bo-history': $('bo-history'),
     'bo-waitlist': $('bo-waitlist'),
     'bo-templates': $('bo-templates')
   };
+
+  // ─── DOM refs: Dashboard ───
+  const statDMsToday     = $('statDMsToday');
+  const statDMsWeek      = $('statDMsWeek');
+  const statSuccessRate  = $('statSuccessRate');
+  const statWaitlist     = $('statWaitlist');
+  const activityChart    = $('activityChart');
+  const outcomeChart     = $('outcomeChart');
+  const sessionHealthDisplay = $('sessionHealthDisplay');
+
+  // ─── DOM refs: CSV Import/Export ───
+  const btnImportCSV     = $('btnImportCSV');
+  const btnExportCSV     = $('btnExportCSV');
+  const csvFileInput     = $('csvFileInput');
+  const btnExportHistory = $('btnExportHistory');
 
   // Templates
   const templatesList    = $('templatesList');
@@ -157,15 +173,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   await refreshCadenceQueue();
   setupCadenceToggles();
   setupPlatformSelector();
+  setupCSVHandlers();
+  renderDashboard();
 
   // ─── Listen for real-time progress from background ───
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.action === 'progressUpdate') handleProgressUpdate(msg);
     if (msg.action === 'dmProgressUpdate') handleDMProgressUpdate(msg);
-    if (msg.action === 'boProgressUpdate') handleBOProgressUpdate(msg);
+    if (msg.action === 'boProgressUpdate') { handleBOProgressUpdate(msg); renderDashboard(); }
     if (msg.action === 'waitlistCheckUpdate') handleWaitlistCheckUpdate(msg);
     if (msg.action === 'cadenceUpdate') refreshCadenceQueue();
-    if (msg.action === 'historyUpdate') refreshHistory();
+    if (msg.action === 'historyUpdate') { refreshHistory(); renderDashboard(); }
   });
 
 
@@ -212,6 +230,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const id = tab.dataset.subtab;
       subTabs.forEach(t => t.classList.toggle('active', t === tab));
       Object.entries(subPanels).forEach(([k, v]) => { if (v) v.classList.toggle('active', k === id); });
+      if (id === 'bo-dashboard') renderDashboard();
       if (id === 'bo-waitlist') refreshWaitlist();
       if (id === 'bo-history') { refreshHistory(); refreshCadenceQueue(); }
     });
@@ -1286,5 +1305,292 @@ document.addEventListener('DOMContentLoaded', async () => {
     container.appendChild(entry);
     container.scrollTop = container.scrollHeight;
   }
+
+
+  // ═══════════════════════════════════════════════════════════════
+  //  DASHBOARD
+  // ═══════════════════════════════════════════════════════════════
+
+  async function renderDashboard() {
+    try {
+      // Fetch history and waitlist
+      const [histData, waitData, healthData] = await Promise.all([
+        bg({ action: 'getHistory' }),
+        bg({ action: 'getWaitlist' }),
+        bg({ action: 'getSessionHealth' })
+      ]);
+
+      const history = histData.history || [];
+      const waitlist = waitData.waitlist || [];
+      const health = healthData || {};
+
+      const now = Date.now();
+      const oneDayMs = 24 * 60 * 60 * 1000;
+      const oneWeekMs = 7 * oneDayMs;
+
+      // Compute stats
+      const dmsToday = history.filter(h => h.status === 'messaged' && h.timestamp && (now - h.timestamp) < oneDayMs).length;
+      const dmsWeek = history.filter(h => h.status === 'messaged' && h.timestamp && (now - h.timestamp) < oneWeekMs).length;
+      const totalAttempts = history.filter(h => h.timestamp && (now - h.timestamp) < oneWeekMs).length;
+      const successCount = history.filter(h => h.status === 'messaged' && h.timestamp && (now - h.timestamp) < oneWeekMs).length;
+      const successRate = totalAttempts > 0 ? Math.round((successCount / totalAttempts) * 100) : 0;
+      const waitlistCount = waitlist.length;
+
+      // Update stat cards
+      if (statDMsToday) statDMsToday.textContent = dmsToday;
+      if (statDMsWeek) statDMsWeek.textContent = dmsWeek;
+      if (statSuccessRate) statSuccessRate.textContent = `${successRate}%`;
+      if (statWaitlist) statWaitlist.textContent = waitlistCount;
+
+      // Render 7-day bar chart
+      renderActivityChart(history);
+
+      // Render outcome breakdown
+      renderOutcomeChart(history);
+
+      // Render session health
+      renderSessionHealth(health);
+
+    } catch (e) {
+      console.warn('Dashboard render error:', e);
+    }
+  }
+
+  function renderActivityChart(history) {
+    if (!activityChart) return;
+
+    const now = Date.now();
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    const days = [];
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+    // Build last 7 days (today = index 6)
+    for (let i = 6; i >= 0; i--) {
+      const dayStart = new Date(now - i * oneDayMs);
+      dayStart.setHours(0, 0, 0, 0);
+      const dayEnd = new Date(dayStart.getTime() + oneDayMs);
+      const count = history.filter(h =>
+        h.status === 'messaged' && h.timestamp && h.timestamp >= dayStart.getTime() && h.timestamp < dayEnd.getTime()
+      ).length;
+      days.push({ label: dayNames[dayStart.getDay()], count });
+    }
+
+    const maxCount = Math.max(...days.map(d => d.count), 1);
+
+    activityChart.innerHTML = days.map(d => {
+      const heightPct = Math.max((d.count / maxCount) * 100, 3);
+      return `<div class="bar-day">
+        <span class="bar-count">${d.count || ''}</span>
+        <div class="bar-fill" style="height:${heightPct}%"></div>
+        <span class="bar-label">${d.label}</span>
+      </div>`;
+    }).join('');
+  }
+
+  function renderOutcomeChart(history) {
+    if (!outcomeChart) return;
+
+    const now = Date.now();
+    const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
+    const weekHistory = history.filter(h => h.timestamp && (now - h.timestamp) < oneWeekMs);
+
+    const messaged = weekHistory.filter(h => h.status === 'messaged').length;
+    const followed = weekHistory.filter(h => h.status === 'followed' || h.status === 'requested').length;
+    const waitlisted = weekHistory.filter(h => h.status === 'skipped' || h.status === 'requested').length;
+    const errors = weekHistory.filter(h => h.status === 'error').length;
+
+    const maxVal = Math.max(messaged, followed, waitlisted, errors, 1);
+
+    const bars = [
+      { label: 'Messaged', cls: 'messaged', value: messaged },
+      { label: 'Followed', cls: 'followed', value: followed },
+      { label: 'Waitlisted', cls: 'waitlisted', value: waitlisted },
+      { label: 'Errors', cls: 'error', value: errors }
+    ];
+
+    outcomeChart.innerHTML = bars.map(b => {
+      const widthPct = maxVal > 0 ? Math.round((b.value / maxVal) * 100) : 0;
+      return `<div class="h-bar-row">
+        <span class="h-bar-label">${b.label}</span>
+        <div class="h-bar-track"><div class="h-bar-fill ${b.cls}" style="width:${widthPct}%"></div></div>
+        <span class="h-bar-value">${b.value}</span>
+      </div>`;
+    }).join('');
+  }
+
+  function renderSessionHealth(health) {
+    if (!sessionHealthDisplay) return;
+
+    const total = (health.totalSent || 0) + (health.totalFailed || 0);
+    if (total === 0) {
+      sessionHealthDisplay.innerHTML = '<span class="health-status good">No active session</span>';
+      return;
+    }
+
+    const rate = health.successRate ?? 100;
+    let statusClass = 'good';
+    let statusText = 'Healthy';
+    let barColor = '#00c853';
+
+    if (rate < 60) { statusClass = 'bad'; statusText = 'Degraded'; barColor = '#ed4956'; }
+    else if (rate < 80) { statusClass = 'warning'; statusText = 'Fair'; barColor = '#ff9800'; }
+
+    sessionHealthDisplay.innerHTML = `
+      <span class="health-status ${statusClass}">${statusText} — ${health.totalSent || 0} sent, ${health.totalFailed || 0} failed</span>
+      <div class="health-bar">
+        <div class="health-bar-track">
+          <div class="health-bar-fill" style="width:${rate}%;background:${barColor}"></div>
+        </div>
+        <span class="health-bar-pct" style="color:${barColor}">${rate}%</span>
+      </div>
+    `;
+  }
+
+
+  // ═══════════════════════════════════════════════════════════════
+  //  CSV IMPORT / EXPORT
+  // ═══════════════════════════════════════════════════════════════
+
+  function setupCSVHandlers() {
+    // Import CSV
+    if (btnImportCSV) {
+      btnImportCSV.addEventListener('click', () => {
+        if (csvFileInput) csvFileInput.click();
+      });
+    }
+
+    if (csvFileInput) {
+      csvFileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+          const text = evt.target.result;
+          const handles = parseCSVHandles(text);
+          if (handles.length > 0 && boHandlesInput) {
+            // Append to existing content or replace
+            const existing = boHandlesInput.value.trim();
+            boHandlesInput.value = existing ? existing + '\n' + handles.join('\n') : handles.join('\n');
+          }
+          // Reset file input so same file can be re-imported
+          csvFileInput.value = '';
+        };
+        reader.readAsText(file);
+      });
+    }
+
+    // Export handles to CSV
+    if (btnExportCSV) {
+      btnExportCSV.addEventListener('click', () => {
+        if (!boHandlesInput) return;
+        const raw = boHandlesInput.value.trim();
+        if (!raw) return;
+
+        const handles = raw.split('\n').map(h => h.trim().replace(/^@/, '')).filter(Boolean);
+        const csvContent = 'handle\n' + handles.map(h => h).join('\n');
+        downloadCSV(csvContent, 'handles_export.csv');
+      });
+    }
+
+    // Export History to CSV
+    if (btnExportHistory) {
+      btnExportHistory.addEventListener('click', async () => {
+        try {
+          const { history } = await bg({ action: 'getHistory' });
+          const items = history || [];
+          if (!items.length) return;
+
+          const headers = ['username', 'platform', 'status', 'viewed', 'followed', 'messaged', 'templateName', 'timestamp', 'message', 'cadenceStep'];
+          const rows = items.map(h => [
+            h.username || '',
+            h.platform || 'instagram',
+            h.status || '',
+            h.viewed ? 'true' : 'false',
+            h.followed ? 'true' : 'false',
+            h.status === 'messaged' ? 'true' : 'false',
+            csvEscape(h.templateName || ''),
+            h.timestamp ? new Date(h.timestamp).toISOString() : '',
+            csvEscape(h.message || ''),
+            h.cadenceStep || ''
+          ]);
+
+          const csvContent = headers.join(',') + '\n' + rows.map(r => r.join(',')).join('\n');
+          downloadCSV(csvContent, 'outreach_history.csv');
+        } catch (e) {
+          console.warn('Export history error:', e);
+        }
+      });
+    }
+  }
+
+  function parseCSVHandles(text) {
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (lines.length === 0) return [];
+
+    // Check if first line is a header
+    const firstLine = lines[0].toLowerCase();
+    const hasHeader = firstLine.includes('handle') || firstLine.includes('username') || firstLine.includes('user');
+    const dataLines = hasHeader ? lines.slice(1) : lines;
+
+    // Determine column index
+    let colIdx = 0;
+    if (hasHeader) {
+      const cols = lines[0].split(',').map(c => c.trim().toLowerCase().replace(/["']/g, ''));
+      const handleIdx = cols.findIndex(c => c === 'handle' || c === 'username' || c === 'user');
+      if (handleIdx >= 0) colIdx = handleIdx;
+    }
+
+    const handles = [];
+    for (const line of dataLines) {
+      // Simple CSV parsing (handles commas in quotes)
+      const cols = parseCSVLine(line);
+      const val = (cols[colIdx] || '').trim().replace(/^@/, '');
+      if (val && !val.includes(' ')) handles.push(val);
+    }
+
+    return [...new Set(handles)];
+  }
+
+  function parseCSVLine(line) {
+    const result = [];
+    let current = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') { current += '"'; i++; }
+        else { inQuotes = !inQuotes; }
+      } else if (ch === ',' && !inQuotes) {
+        result.push(current); current = '';
+      } else {
+        current += ch;
+      }
+    }
+    result.push(current);
+    return result;
+  }
+
+  function csvEscape(str) {
+    if (!str) return '';
+    if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+      return '"' + str.replace(/"/g, '""') + '"';
+    }
+    return str;
+  }
+
+  function downloadCSV(content, filename) {
+    const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+  }
+
 
 });

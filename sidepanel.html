@@ -69,9 +69,13 @@
       </div>
     </div>
 
-    <!-- Sub-tabs: Outreach | History | Waitlist | Templates -->
+    <!-- Sub-tabs: Dashboard | Outreach | History | Waitlist | Templates -->
     <nav class="sub-tabs">
-      <button class="sub-tab active" data-subtab="bo-outreach">
+      <button class="sub-tab active" data-subtab="bo-dashboard">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+        Dashboard
+      </button>
+      <button class="sub-tab" data-subtab="bo-outreach">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
         Outreach
       </button>
@@ -91,15 +95,76 @@
       </button>
     </nav>
 
+    <!-- ─── Sub-tab 0: Dashboard ─── -->
+    <section id="bo-dashboard" class="sub-panel active">
+      <div class="card">
+        <div class="card-header"><h2>Dashboard</h2></div>
+        <div class="card-body">
+          <!-- Stats Cards -->
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-value" id="statDMsToday">0</div>
+              <div class="stat-label">DMs Today</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="statDMsWeek">0</div>
+              <div class="stat-label">This Week</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="statSuccessRate">0%</div>
+              <div class="stat-label">Success Rate</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value" id="statWaitlist">0</div>
+              <div class="stat-label">Waitlisted</div>
+            </div>
+          </div>
+
+          <!-- Activity Chart -->
+          <div class="chart-section">
+            <h3 class="chart-title">7-Day Activity</h3>
+            <div id="activityChart" class="bar-chart"></div>
+          </div>
+
+          <!-- Status Breakdown -->
+          <div class="chart-section">
+            <h3 class="chart-title">Outcome Breakdown</h3>
+            <div id="outcomeChart" class="horizontal-bars"></div>
+          </div>
+
+          <!-- Session Health -->
+          <div class="chart-section">
+            <h3 class="chart-title">Current Session Health</h3>
+            <div id="sessionHealthDisplay" class="health-display">
+              <span class="health-status good">No active session</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- ─── Sub-tab 1: Outreach ─── -->
-    <section id="bo-outreach" class="sub-panel active">
+    <section id="bo-outreach" class="sub-panel">
       <div class="card">
         <div class="card-header"><h2>Bulk Outreach</h2></div>
         <div class="card-body">
           <div class="field">
             <label for="boHandles" id="boHandlesLabel">Instagram Handles</label>
             <textarea id="boHandles" rows="4" placeholder="username1&#10;username2&#10;username3"></textarea>
-            <span class="hint">One handle per line. @ prefix optional.</span>
+            <div class="csv-actions">
+              <span class="hint">One handle per line. @ prefix optional.</span>
+              <div class="csv-btns">
+                <button id="btnImportCSV" class="btn btn-sm btn-csv" title="Import from CSV">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                  Import CSV
+                </button>
+                <button id="btnExportCSV" class="btn btn-sm btn-csv" title="Export handles to CSV">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  Export CSV
+                </button>
+              </div>
+            </div>
+            <input type="file" id="csvFileInput" accept=".csv,.txt" style="display:none" />
           </div>
 
           <div class="field-row">
@@ -233,7 +298,11 @@
           </div>
 
           <div class="btn-row" style="margin-top:10px">
-            <button id="btnClearHistory" class="btn btn-secondary btn-full">Clear History</button>
+            <button id="btnExportHistory" class="btn btn-secondary">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Export History
+            </button>
+            <button id="btnClearHistory" class="btn btn-secondary">Clear History</button>
           </div>
         </div>
       </div>
