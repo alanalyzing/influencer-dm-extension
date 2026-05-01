@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Influencer DM Manager",
-  "version": "6.0.0",
-  "description": "Instagram & Threads influencer engagement manager. Bulk outreach, keyword-scan, DM templates, three-light status tracking, cadence follow-ups, and waitlist.",
+  "version": "7.0.0",
+  "description": "Instagram & Threads influencer engagement manager. Dashboard analytics, CSV import/export, bulk outreach, keyword-scan, DM templates, three-light status tracking, cadence follow-ups, and waitlist.",
   "permissions": [
     "activeTab",
     "storage",

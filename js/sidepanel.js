@@ -1,16 +1,19 @@
 /**
- * Side Panel Controller (v5)
+ * Side Panel Controller (v7)
  *
  * Two modes:
  *   1. Bulk Outreach (primary) — handle list, templates, status lights, history, cadence
  *   2. Keyword Scan — scan post comments for keywords, send DMs
  *
- * New in v5:
- *   - Three-light status per account: viewed / followed / messaged
- *   - History tab with all sends and filter
- *   - Auto-cadence follow-up scheduling (6h, 12h, 24h)
- *   - Full Automation toggle for Bulk Outreach
- *   - Bulk Outreach is now the default/first tab
+ * New in v7:
+ *   - Dashboard sub-tab with stats grid, 7-day activity chart, outcome breakdown, session health
+ *   - CSV Import: parse CSV/TXT files into handles textarea
+ *   - CSV Export: download handles list or full history as CSV
+ *   - Dashboard is the default active sub-tab in Bulk Outreach
+ *
+ * Previous versions:
+ *   v6: Multi-platform (Instagram + Threads), session health monitoring, DM reliability
+ *   v5: Three-light status, history, cadence follow-ups, full automation toggle
  */
 
 document.addEventListener('DOMContentLoaded', async () => {

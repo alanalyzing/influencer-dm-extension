@@ -1,6 +1,40 @@
 # Influencer DM Manager — Chrome Extension
 
-> Automate Instagram & Threads influencer engagement: keyword-based comment scanning, bulk outreach with smart follow/DM logic, templated messaging, cadence follow-ups, and waitlist management. No AI, no API keys, 100% local browser automation.
+> Automate Instagram & Threads influencer engagement: keyword-based comment scanning, bulk outreach with smart follow/DM logic, templated messaging, cadence follow-ups, waitlist management, dashboard analytics, and CSV import/export. No AI, no API keys, 100% local browser automation.
+
+---
+
+## What's New in v7
+
+### Dashboard Analytics
+
+A new **Dashboard** sub-tab is now the default view when opening Bulk Outreach. It provides at-a-glance performance metrics without leaving the side panel:
+
+| Metric | Description |
+|--------|-------------|
+| **DMs Today** | Number of successful DMs sent in the last 24 hours |
+| **DMs This Week** | Total DMs sent in the last 7 days |
+| **Success Rate** | Percentage of successful sends vs total attempts (7-day window) |
+| **Waitlisted** | Current number of users pending follow-back |
+
+**Visual Charts:**
+- **7-Day Activity Bar Chart** — Shows DMs sent per day with gradient-filled bars
+- **Outcome Breakdown** — Horizontal bars comparing messaged / followed / waitlisted / errors for the week
+- **Session Health Display** — Real-time health bar showing success rate with Healthy / Fair / Degraded status indicators
+
+The dashboard auto-refreshes whenever outreach progress or history updates are received.
+
+### CSV Import / Export
+
+**Import CSV** — Click the Import CSV button on the Outreach sub-tab to load handles from a `.csv` or `.txt` file. The parser automatically detects columns named `handle`, `username`, or `user`, and handles quoted fields, various delimiters, and plain lists.
+
+**Export CSV** — Export your current handles list to a downloadable CSV file with a single click.
+
+**Export History** — On the History sub-tab, export your full outreach history as a CSV with columns: `username`, `platform`, `status`, `viewed`, `followed`, `messaged`, `templateName`, `timestamp`, `message`, `cadenceStep`.
+
+### Other v7 Improvements
+- Dashboard is now the **default active sub-tab** in Bulk Outreach (before Outreach, History, Waitlist, Templates)
+- Sub-tab order: Dashboard → Outreach → History → Waitlist → Templates
 
 ---
 
@@ -33,10 +67,11 @@ Provide a list of handles and let the extension connect and message each one.
 
 **Sub-tabs:**
 
-1. **Outreach** — Paste handles, assign templates, configure delay, start outreach
-2. **History** — All past interactions with three-light status indicators and filters
-3. **Waitlist** — Users pending follow-back approval, with re-check functionality
-4. **Templates** — Create, edit, and delete reusable DM templates (Reply Directions)
+1. **Dashboard** — At-a-glance stats, 7-day chart, outcome breakdown, session health (v7)
+2. **Outreach** — Paste handles (or import CSV), assign templates, configure delay, start outreach
+3. **History** — All past interactions with three-light status indicators, filters, and CSV export
+4. **Waitlist** — Users pending follow-back approval, with re-check functionality
+5. **Templates** — Create, edit, and delete reusable DM templates (Reply Directions)
 
 **Additional Features:**
 - **Full Automation toggle** — Skip review, go straight from parsing to sending
