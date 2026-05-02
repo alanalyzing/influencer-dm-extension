@@ -1,8 +1,21 @@
 /**
- * X (Twitter) Content Script (v1) — Atomic Single-Page Actions for x.com
+ * X (Twitter) Content Script (v2) — Atomic Single-Page Actions for x.com
  *
- * This script NEVER navigates. It only performs actions on the current page.
- * The background service worker handles all navigation.
+ * Updated with verified DOM selectors from real logged-in X (May 2026).
+ *
+ * KEY DOM FINDINGS:
+ *   - X uses data-testid attributes extensively — very reliable selectors
+ *   - Follow button: button[data-testid$="-follow"] or button[aria-label^="Follow @"]
+ *   - DM button on profile: button[aria-label="Message"] (NO data-testid!)
+ *   - Tweet: article[data-testid="tweet"]
+ *   - Tweet text: div[data-testid="tweetText"]
+ *   - Reply input: div[data-testid="tweetTextarea_0"][role="textbox"] (contenteditable)
+ *   - Reply send: button[data-testid="tweetButtonInline"]
+ *   - DM compose input: div[data-testid="dmComposerTextInput"] (contenteditable)
+ *   - DM send: button[data-testid="dmComposerSendButton"]
+ *   - User-Name: div[data-testid="User-Name"]
+ *   - UserAvatar: div[data-testid="UserAvatar-Container-{username}"]
+ *   - DM new chat: button[data-testid="dm-new-chat-button"]
  *
  * Actions:
  *   1. scanComments        — on a tweet page: scroll replies, extract, match keywords
@@ -15,20 +28,14 @@
  *   8. checkIfPrivate      — check if profile is protected/locked
  *   9. checkDMAvailability — check if user accepts DMs
  *  10. ping                — health check
- *
- * X-specific notes:
- *   - DMs are limited: user must follow you back OR have open DMs
- *   - If DMs are closed, the extension can reply to their tweet instead
- *   - Protected accounts can't have their tweets seen unless you follow them
- *   - X uses data-testid attributes extensively for element identification
  */
 
 (() => {
   'use strict';
 
   // Prevent duplicate injection
-  if (window.__IEM_X_V1__) return;
-  window.__IEM_X_V1__ = true;
+  if (window.__IEM_X_V2__) return;
+  window.__IEM_X_V2__ = true;
 
   if (window.__IEM_X_LISTENER__) {
     chrome.runtime.onMessage.removeListener(window.__IEM_X_LISTENER__);
@@ -81,11 +88,8 @@
       await sleep(1000);
 
       // Click "Show more replies" or "Show" buttons
-      const showMoreBtns = document.querySelectorAll(
-        '[data-testid="tweet"] button[role="button"], ' +
-        'div[role="button"][tabindex="0"]'
-      );
-      for (const btn of showMoreBtns) {
+      const allButtons = document.querySelectorAll('button[role="button"], div[role="button"]');
+      for (const btn of allButtons) {
         const text = btn.textContent.trim().toLowerCase();
         if (text.includes('show') && (text.includes('replies') || text.includes('more'))) {
           btn.click();
@@ -94,7 +98,7 @@
       }
     }
 
-    // Extract replies
+    // Extract replies — each reply is an <article data-testid="tweet">
     const users = new Map();
     const tweetArticles = document.querySelectorAll('article[data-testid="tweet"]');
 
@@ -102,32 +106,44 @@
     const replies = Array.from(tweetArticles).slice(1);
 
     for (const article of replies) {
-      // Extract username from the reply
-      const usernameLink = article.querySelector(
-        'a[href*="/"] div[dir="ltr"] > span'
-      );
-      
-      // Try to find @username
-      const allLinks = article.querySelectorAll('a[role="link"]');
       let username = '';
       let displayName = '';
 
-      for (const link of allLinks) {
-        const href = link.getAttribute('href') || '';
-        if (href.match(/^\/[A-Za-z0-9_]+$/) && !href.includes('/status/')) {
-          username = href.replace('/', '');
-          displayName = link.textContent.trim();
-          break;
+      // Strategy 1: Use UserAvatar-Container data-testid to extract username
+      const avatarEl = article.querySelector('div[data-testid^="UserAvatar-Container-"]');
+      if (avatarEl) {
+        const testId = avatarEl.getAttribute('data-testid') || '';
+        username = testId.replace('UserAvatar-Container-', '');
+      }
+
+      // Strategy 2: Find @username from User-Name div
+      if (!username) {
+        const userNameDiv = article.querySelector('div[data-testid="User-Name"]');
+        if (userNameDiv) {
+          const spans = userNameDiv.querySelectorAll('span');
+          for (const span of spans) {
+            const text = span.textContent.trim();
+            if (text.startsWith('@')) {
+              username = text.replace('@', '');
+              break;
+            }
+          }
+          // Get display name from first link text
+          const nameLink = userNameDiv.querySelector('a[role="link"]');
+          if (nameLink) {
+            displayName = nameLink.textContent.trim().split('\n')[0].trim();
+          }
         }
       }
 
+      // Strategy 3: Find profile links
       if (!username) {
-        // Fallback: look for @handle text
-        const spans = article.querySelectorAll('span');
-        for (const span of spans) {
-          const text = span.textContent.trim();
-          if (text.startsWith('@')) {
-            username = text.replace('@', '');
+        const allLinks = article.querySelectorAll('a[role="link"]');
+        for (const link of allLinks) {
+          const href = link.getAttribute('href') || '';
+          if (href.match(/^\/[A-Za-z0-9_]+$/) && !href.includes('/status/')) {
+            username = href.replace('/', '');
+            displayName = link.textContent.trim();
             break;
           }
         }
@@ -135,8 +151,8 @@
 
       if (!username) continue;
 
-      // Extract reply text
-      const tweetTextEl = article.querySelector('[data-testid="tweetText"]');
+      // Extract reply text using data-testid="tweetText"
+      const tweetTextEl = article.querySelector('div[data-testid="tweetText"]');
       const replyText = tweetTextEl ? tweetTextEl.textContent.trim() : '';
 
       // Check keyword match
@@ -170,48 +186,56 @@
     let isProtected = false;
     let isRequested = false;
 
-    // Check for the DM/Message icon button (envelope icon on profile)
-    const dmBtn = document.querySelector(
-      '[data-testid="sendDMFromProfile"], ' +
-      'button[aria-label*="Message"], ' +
-      'a[href*="/messages/compose"]'
-    );
+    // Check for DM/Message button — button[aria-label="Message"] (NO data-testid!)
+    const dmBtn = document.querySelector('button[aria-label="Message"]');
     if (dmBtn) {
       hasMessage = true;
     }
 
-    // Check Follow/Following status
-    const followBtn = document.querySelector(
-      '[data-testid*="follow"], ' +
-      '[data-testid*="Follow"]'
-    );
+    // Check Follow button — button[data-testid$="-follow"] or button[aria-label^="Follow @"]
+    const followBtn = document.querySelector('button[data-testid$="-follow"]') ||
+                      document.querySelector('button[aria-label^="Follow @"]');
 
     if (followBtn) {
-      const testId = followBtn.getAttribute('data-testid') || '';
       const text = followBtn.textContent.trim().toLowerCase();
       const ariaLabel = (followBtn.getAttribute('aria-label') || '').toLowerCase();
+      const testId = (followBtn.getAttribute('data-testid') || '').toLowerCase();
 
-      if (testId.includes('unfollow') || text.includes('following') || ariaLabel.includes('unfollow')) {
-        isFollowing = true;
-      } else if (text === 'follow' || testId.includes('follow')) {
+      if (text === 'follow' && !testId.includes('unfollow') && !ariaLabel.includes('unfollow')) {
         hasFollow = true;
-      } else if (text === 'pending' || text.includes('pending')) {
-        isRequested = true;
       }
     }
 
-    // Check for protected account indicator
-    const protectedIcon = document.querySelector(
-      'svg[data-testid="icon-lock"], ' +
-      '[data-testid="UserProfileHeader_Items"] svg[aria-label*="Protected"]'
-    );
-    if (protectedIcon) {
+    // Check Following/Unfollow button — button[data-testid$="-unfollow"]
+    const unfollowBtn = document.querySelector('button[data-testid$="-unfollow"]') ||
+                        document.querySelector('button[aria-label^="Following @"]');
+    if (unfollowBtn) {
+      isFollowing = true;
+    }
+
+    // Check for Pending state
+    const allButtons = document.querySelectorAll('button');
+    for (const btn of allButtons) {
+      const text = btn.textContent.trim().toLowerCase();
+      if (text === 'pending') {
+        isRequested = true;
+        break;
+      }
+    }
+
+    // Check for protected account — look for lock icon or protected text
+    const pageText = document.body.innerText || '';
+    if (pageText.includes('These posts are protected') ||
+        pageText.includes('These Tweets are protected') ||
+        pageText.includes("This account's posts are protected")) {
       isProtected = true;
     }
 
-    // Also check page text for protected indicator
-    const pageText = document.body.innerText || '';
-    if (pageText.includes('These Tweets are protected') || pageText.includes('These posts are protected')) {
+    // Also check for lock icon via aria-label
+    const lockIcon = document.querySelector(
+      'svg[aria-label*="Protected"], svg[aria-label*="protected"]'
+    );
+    if (lockIcon) {
       isProtected = true;
     }
 
@@ -232,21 +256,28 @@
   // ════════════════════════════════════════════════════════════
 
   async function handleClickFollowButton() {
-    // Find the Follow button
-    const followBtn = document.querySelector(
-      '[data-testid*="follow"]:not([data-testid*="unfollow"])'
-    );
+    // Find Follow button using verified selectors
+    let followBtn = document.querySelector('button[data-testid$="-follow"]:not([data-testid$="-unfollow"])');
+    if (!followBtn) {
+      followBtn = document.querySelector('button[aria-label^="Follow @"]');
+    }
 
     if (!followBtn) {
-      // Fallback: find by text
-      const buttons = document.querySelectorAll('button[role="button"], div[role="button"]');
+      // Fallback: find by text content
+      const buttons = document.querySelectorAll('button[role="button"]');
       for (const btn of buttons) {
-        const text = btn.textContent.trim().toLowerCase();
-        if (text === 'follow') {
-          btn.click();
-          await sleep(1000);
-          return { success: true, status: 'Following', alreadyFollowing: false };
+        if (btn.textContent.trim() === 'Follow') {
+          followBtn = btn;
+          break;
         }
+      }
+    }
+
+    if (!followBtn) {
+      // Check if already following
+      const unfollowBtn = document.querySelector('button[data-testid$="-unfollow"]');
+      if (unfollowBtn) {
+        return { success: true, status: 'Following', alreadyFollowing: true };
       }
       return { success: false, error: 'No Follow button found' };
     }
@@ -257,16 +288,19 @@
     }
 
     followBtn.click();
-    await sleep(1000);
+    await sleep(1500);
 
-    // Check if it changed to Following or Pending
-    const updatedBtn = document.querySelector('[data-testid*="follow"]');
+    // Verify: check if button changed to Following or Pending
+    const updatedBtn = document.querySelector('button[data-testid$="-unfollow"]') ||
+                       document.querySelector('button[aria-label^="Following @"]');
     if (updatedBtn) {
-      const newText = updatedBtn.textContent.trim().toLowerCase();
-      if (newText.includes('following')) {
-        return { success: true, status: 'Following', alreadyFollowing: false };
-      }
-      if (newText.includes('pending')) {
+      return { success: true, status: 'Following', alreadyFollowing: false };
+    }
+
+    // Check for Pending
+    const allButtons = document.querySelectorAll('button');
+    for (const btn of allButtons) {
+      if (btn.textContent.trim().toLowerCase() === 'pending') {
         return { success: true, status: 'Requested', alreadyFollowing: false };
       }
     }
@@ -280,12 +314,9 @@
 
   async function handleCheckForMessageButton() {
     for (let attempt = 0; attempt < 10; attempt++) {
-      const dmBtn = document.querySelector(
-        '[data-testid="sendDMFromProfile"], ' +
-        'button[aria-label*="Message"], ' +
-        'a[href*="/messages/compose"]'
-      );
-      if (dmBtn) {
+      // Primary: button[aria-label="Message"] (verified — no data-testid!)
+      const dmBtn = document.querySelector('button[aria-label="Message"]');
+      if (dmBtn && !dmBtn.disabled) {
         return { found: true };
       }
       await sleep(500);
@@ -298,22 +329,12 @@
   // ════════════════════════════════════════════════════════════
 
   async function handleClickMessageButton() {
-    const dmBtn = document.querySelector(
-      '[data-testid="sendDMFromProfile"], ' +
-      'button[aria-label*="Message"]'
-    );
+    // Primary: button[aria-label="Message"] (verified)
+    const dmBtn = document.querySelector('button[aria-label="Message"]');
 
     if (dmBtn) {
       dmBtn.click();
       await sleep(2000); // Wait for DM compose to open
-      return { success: true };
-    }
-
-    // Try the compose link
-    const composeLink = document.querySelector('a[href*="/messages/compose"]');
-    if (composeLink) {
-      composeLink.click();
-      await sleep(2000);
       return { success: true };
     }
 
@@ -327,25 +348,37 @@
   async function handleTypeAndSendDM(message) {
     if (!message) return { error: 'No message provided' };
 
-    // Wait for DM input to appear
-    await sleep(1500);
+    // Wait for DM compose to appear
+    await sleep(2000);
 
-    // Find the DM input
+    // Find the DM input — data-testid="dmComposerTextInput" (verified)
     const inputSelectors = [
-      '[data-testid="dmComposerTextInput"]',
-      'div[data-testid="dmComposerTextInput"] [contenteditable="true"]',
+      'div[data-testid="dmComposerTextInput"]',
+      'div[data-testid="dmComposerTextInput"] div[contenteditable="true"]',
+      'div[data-testid="dmComposerTextInput"] div[role="textbox"]',
       'div[role="textbox"][data-testid="dmComposerTextInput"]',
-      'div[data-testid="DmScrollerContainer"] div[contenteditable="true"]',
-      'div[aria-label*="Start a new message"] div[contenteditable="true"]',
-      'div[data-testid="messageEntry"] div[contenteditable="true"]',
-      'div[role="textbox"][aria-label*="message"]'
+      // Fallback selectors
+      'aside div[role="textbox"][contenteditable="true"]',
+      'div[data-testid="DmScrollerContainer"] div[contenteditable="true"]'
     ];
 
     let input = null;
     for (let attempt = 0; attempt < 20; attempt++) {
       for (const sel of inputSelectors) {
-        input = document.querySelector(sel);
-        if (input) break;
+        const el = document.querySelector(sel);
+        if (el) {
+          // If the element itself is contenteditable, use it
+          if (el.getAttribute('contenteditable') === 'true' || el.getAttribute('role') === 'textbox') {
+            input = el;
+            break;
+          }
+          // Otherwise look for a contenteditable child
+          const child = el.querySelector('[contenteditable="true"], [role="textbox"]');
+          if (child) {
+            input = child;
+            break;
+          }
+        }
       }
       if (input) break;
       await sleep(500);
@@ -363,14 +396,17 @@
     input.textContent = '';
     await sleep(100);
 
-    // Type message line by line with Enter for line breaks
+    // Type message using execCommand for contenteditable compatibility
     const lines = message.split('\n');
     for (let i = 0; i < lines.length; i++) {
-      // Use execCommand for contenteditable
       document.execCommand('insertText', false, lines[i]);
       if (i < lines.length - 1) {
         // Shift+Enter for line break within DM
-        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true }));
+        const enterEvent = new KeyboardEvent('keydown', {
+          key: 'Enter', code: 'Enter', keyCode: 13,
+          shiftKey: true, bubbles: true, cancelable: true
+        });
+        input.dispatchEvent(enterEvent);
         document.execCommand('insertLineBreak');
       }
       await sleep(50);
@@ -379,12 +415,11 @@
     input.dispatchEvent(new Event('input', { bubbles: true }));
     await sleep(500);
 
-    // Find and click Send button
-    const sendBtn = document.querySelector(
-      '[data-testid="dmComposerSendButton"], ' +
-      'button[aria-label="Send"], ' +
-      'div[role="button"][data-testid="dmComposerSendButton"]'
-    );
+    // Find and click Send button — data-testid="dmComposerSendButton" (verified)
+    let sendBtn = document.querySelector('button[data-testid="dmComposerSendButton"]');
+    if (!sendBtn) {
+      sendBtn = document.querySelector('button[aria-label="Send"]');
+    }
 
     if (!sendBtn) {
       return { error: 'Send button not found in X DM' };
@@ -394,8 +429,9 @@
     await sleep(2000);
 
     // Verify: check if input was cleared
-    const inputAfter = document.querySelector(inputSelectors[0]) || input;
-    if (inputAfter && inputAfter.textContent.trim() === '') {
+    const inputAfter = document.querySelector('div[data-testid="dmComposerTextInput"]') || input;
+    const afterText = inputAfter.textContent || inputAfter.innerText || '';
+    if (afterText.trim() === '') {
       return { success: true };
     }
 
@@ -412,47 +448,55 @@
     // We should be on the tweet page already
     await sleep(1500);
 
-    // Find the reply input (tweet compose box on the tweet page)
-    const replyInputSelectors = [
-      'div[data-testid="tweetTextarea_0"] div[contenteditable="true"]',
-      'div[data-testid="tweetTextarea_0"]',
-      'div[role="textbox"][data-testid*="tweetTextarea"]',
-      'div[aria-label*="Post your reply"]',
-      'div[aria-label*="Tweet your reply"]',
-      'div[data-testid="reply"] div[contenteditable="true"]'
-    ];
-
-    let input = null;
-
     // First, click the reply area to activate it
-    const replyArea = document.querySelector(
-      '[data-testid="tweetTextarea_0"], ' +
-      'div[aria-label*="reply"], ' +
-      'div[aria-label*="Reply"]'
-    );
+    // The reply input is: div[data-testid="tweetTextarea_0"] (verified)
+    let replyArea = document.querySelector('div[data-testid="tweetTextarea_0"]');
     if (replyArea) {
       replyArea.click();
       await sleep(800);
     }
 
-    // Now find the active input
+    // Find the actual contenteditable input inside the reply area
+    let input = null;
     for (let attempt = 0; attempt < 20; attempt++) {
-      for (const sel of replyInputSelectors) {
-        input = document.querySelector(sel);
-        if (input && input.getAttribute('contenteditable') === 'true') break;
-        input = null;
+      // Look for contenteditable inside tweetTextarea_0
+      const container = document.querySelector('div[data-testid="tweetTextarea_0"]');
+      if (container) {
+        if (container.getAttribute('contenteditable') === 'true') {
+          input = container;
+          break;
+        }
+        const child = container.querySelector('[contenteditable="true"]');
+        if (child) {
+          input = child;
+          break;
+        }
+        // The container itself might be the textbox
+        if (container.getAttribute('role') === 'textbox') {
+          input = container;
+          break;
+        }
       }
-      if (input) break;
 
-      // Try clicking the reply button/area again
-      const replyBtn = document.querySelector(
-        '[data-testid="reply"], ' +
-        'div[aria-label*="Reply"]'
-      );
-      if (replyBtn && attempt === 5) {
-        replyBtn.click();
-        await sleep(800);
+      // Fallback: find any textbox in the inline reply area
+      const inlineReply = document.querySelector('div[data-testid="inline_reply_offscreen"]');
+      if (inlineReply) {
+        const textbox = inlineReply.querySelector('[role="textbox"][contenteditable="true"]');
+        if (textbox) {
+          input = textbox;
+          break;
+        }
       }
+
+      // Try clicking the reply button to open the reply area
+      if (attempt === 5) {
+        const replyBtn = document.querySelector('button[data-testid="reply"]');
+        if (replyBtn) {
+          replyBtn.click();
+          await sleep(1000);
+        }
+      }
+
       await sleep(500);
     }
 
@@ -466,17 +510,16 @@
     input.textContent = '';
     await sleep(100);
 
-    // Type the reply
+    // Type the reply using execCommand
     document.execCommand('insertText', false, message);
     input.dispatchEvent(new Event('input', { bubbles: true }));
     await sleep(500);
 
-    // Find and click the Reply/Post button
-    const postBtn = document.querySelector(
-      '[data-testid="tweetButtonInline"], ' +
-      '[data-testid="tweetButton"], ' +
-      'button[data-testid="tweetButtonInline"]'
-    );
+    // Find and click the Reply/Post button — data-testid="tweetButtonInline" (verified)
+    let postBtn = document.querySelector('button[data-testid="tweetButtonInline"]');
+    if (!postBtn) {
+      postBtn = document.querySelector('button[data-testid="tweetButton"]');
+    }
 
     if (!postBtn) {
       return { error: 'Reply/Post button not found on X' };
@@ -486,7 +529,7 @@
     await sleep(2000);
 
     // Verify: check if input was cleared
-    if (input.textContent.trim() === '' || input.textContent.trim() !== message) {
+    if (!input.textContent || input.textContent.trim() === '') {
       return { success: true, method: 'reply' };
     }
 
@@ -501,11 +544,11 @@
     await sleep(1000);
     const pageText = document.body.innerText || '';
 
-    // Check for protected account
+    // Check for protected account text
     const protectedIndicators = [
-      'These Tweets are protected',
       'These posts are protected',
-      'This account\'s posts are protected',
+      'These Tweets are protected',
+      "This account's posts are protected",
       'Only approved followers can see'
     ];
 
@@ -515,18 +558,17 @@
       }
     }
 
-    // Check for lock icon
+    // Check for lock icon via aria-label (verified)
     const lockIcon = document.querySelector(
-      'svg[data-testid="icon-lock"], ' +
-      '[aria-label*="Protected"], ' +
-      '[aria-label*="protected"]'
+      'svg[aria-label*="Protected"], svg[aria-label*="protected"]'
     );
     if (lockIcon) {
       return { isPrivate: true, reason: 'Protected account (lock icon)' };
     }
 
     // Check for suspended/deactivated
-    if (pageText.includes('Account suspended') || pageText.includes('doesn\'t exist')) {
+    if (pageText.includes('Account suspended') || pageText.includes("doesn't exist") ||
+        pageText.includes('This account doesn')) {
       return { isPrivate: true, reason: 'Account suspended or does not exist' };
     }
 
@@ -538,14 +580,11 @@
   // ════════════════════════════════════════════════════════════
 
   async function handleCheckDMAvailability() {
-    // Check if the DM button exists on the profile
-    const dmBtn = document.querySelector(
-      '[data-testid="sendDMFromProfile"], ' +
-      'button[aria-label*="Message"]'
-    );
+    // Check for Message button — button[aria-label="Message"] (verified — no data-testid!)
+    const dmBtn = document.querySelector('button[aria-label="Message"]');
 
     if (dmBtn) {
-      // Check if it's disabled or has a tooltip about DMs being closed
+      // Check if it's disabled
       const isDisabled = dmBtn.disabled || dmBtn.getAttribute('aria-disabled') === 'true';
       if (isDisabled) {
         return { canDM: false, reason: 'DM button disabled — user has closed DMs' };

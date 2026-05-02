@@ -1,8 +1,18 @@
 /**
- * LinkedIn Content Script (v1) — Atomic Single-Page Actions for linkedin.com
+ * LinkedIn Content Script (v2) — Atomic Single-Page Actions for linkedin.com
  *
- * This script NEVER navigates. It only performs actions on the current page.
- * The background service worker handles all navigation.
+ * Updated with verified DOM selectors from real logged-in LinkedIn (May 2026).
+ *
+ * KEY DOM FINDINGS:
+ *   - LinkedIn uses obfuscated/hashed CSS class names — NEVER rely on class names
+ *   - Connect button is an <a> tag with aria-label="Invite X to connect"
+ *   - Message button is an <a> tag with text "Message" and href to /messaging/compose/
+ *   - Follow button is a <button> with aria-label="Follow X"
+ *   - Messaging page uses <textarea role="textbox"> (NOT contenteditable div)
+ *   - Messaging overlay uses div.msg-form__contenteditable (contenteditable)
+ *   - Comments use <article class="comments-comment-entity">
+ *   - Comment text: <span class="comments-comment-item__main-content">
+ *   - Comment author links: a[href*="/in/"] inside comment blocks
  *
  * Actions:
  *   1. scanComments       — on a post page: scroll comments, extract, match keywords
@@ -11,29 +21,47 @@
  *   4. clickFollowButton  — on a profile: click Follow
  *   5. checkForMessageButton — after connect, check if Message button is available
  *   6. clickMessageButton — click Message button on profile
- *   7. typeAndSendDM      — on messaging overlay: type and send message
+ *   7. typeAndSendDM      — on messaging overlay/page: type and send message
  *   8. checkIfPrivate     — check if profile has restricted messaging
  *   9. ping               — health check
- *
- * LinkedIn-specific notes:
- *   - "Connect" is the equivalent of "Follow" on Instagram
- *   - Message button may require being 1st-degree connection
- *   - Connection request can include a note (like a DM)
- *   - LinkedIn uses overlay modals for messaging
  */
 
 (() => {
   'use strict';
 
   // Prevent duplicate injection
-  if (window.__IEM_LINKEDIN_V1__) return;
-  window.__IEM_LINKEDIN_V1__ = true;
+  if (window.__IEM_LINKEDIN_V2__) return;
+  window.__IEM_LINKEDIN_V2__ = true;
 
   if (window.__IEM_LINKEDIN_LISTENER__) {
     chrome.runtime.onMessage.removeListener(window.__IEM_LINKEDIN_LISTENER__);
   }
 
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  // ─── Helper: find element by text content ───
+  function findElementByText(selector, text, exact = true) {
+    const elements = document.querySelectorAll(selector);
+    for (const el of elements) {
+      const elText = el.textContent.trim();
+      if (exact ? elText === text : elText.toLowerCase().includes(text.toLowerCase())) {
+        return el;
+      }
+    }
+    return null;
+  }
+
+  // ─── Helper: find element by aria-label pattern ───
+  function findByAriaLabel(selector, pattern) {
+    const elements = document.querySelectorAll(selector);
+    for (const el of elements) {
+      const aria = el.getAttribute('aria-label') || '';
+      if (aria.toLowerCase().includes(pattern.toLowerCase())) {
+        return el;
+      }
+    }
+    return null;
+  }
 
   // ─── Message Handler ───
 
@@ -75,58 +103,42 @@
 
     // Scroll to load more comments
     for (let i = 0; i < 10; i++) {
-      // Click "Load more comments" or "Show more comments" buttons
-      const loadMoreBtns = document.querySelectorAll(
-        'button.comments-comments-list__load-more-comments-button, ' +
-        'button[aria-label*="Load more comments"], ' +
-        'button[aria-label*="Show more"], ' +
-        'button.show-prev-replies'
-      );
-      for (const btn of loadMoreBtns) {
-        btn.click();
-        await sleep(1000);
+      // Click "Load more comments" buttons — find by text since classes are obfuscated
+      const allButtons = document.querySelectorAll('button');
+      for (const btn of allButtons) {
+        const text = btn.textContent.trim().toLowerCase();
+        if (text.includes('load more comments') || text.includes('show more comments') ||
+            text.includes('show previous replies') || text.includes('load more')) {
+          btn.click();
+          await sleep(1000);
+        }
       }
 
-      // Also click "see more replies" buttons
-      const replyBtns = document.querySelectorAll(
-        'button.comments-comment-list__show-more-replies, ' +
-        'button[aria-label*="replies"]'
+      // Also look for "X replies" buttons
+      const replyCountBtns = document.querySelectorAll(
+        'span.comments-comment-social-bar__replies-count--cr'
       );
-      for (const btn of replyBtns) {
-        btn.click();
-        await sleep(500);
+      for (const span of replyCountBtns) {
+        const btn = span.closest('button');
+        if (btn) {
+          btn.click();
+          await sleep(500);
+        }
       }
 
-      // Scroll the comments section
+      // Scroll the page to trigger lazy loading
       window.scrollBy(0, 500);
       await sleep(800);
     }
 
-    // Extract comments
-    const commentElements = document.querySelectorAll(
-      '.comments-comment-item, ' +
-      '.comments-comment-entity, ' +
-      '[data-id*="comment"], ' +
-      '.feed-shared-update-v2__commentary, ' +
-      '.comments-comment-item__main-content'
-    );
-
+    // Extract comments — LinkedIn uses <article class="comments-comment-entity">
     const users = new Map();
 
-    // Try multiple selector strategies for LinkedIn comments
-    const commentBlocks = document.querySelectorAll(
-      '.comments-comment-item, .comments-comment-entity'
-    );
-
-    for (const block of commentBlocks) {
-      // Extract username from the comment author link
-      const authorLink = block.querySelector(
-        'a.comments-post-meta__name-text, ' +
-        'a.comments-post-meta__actor-link, ' +
-        'a[data-control-name="comment_actor"], ' +
-        'a.app-aware-link[href*="/in/"]'
-      );
-
+    // Strategy 1: article.comments-comment-entity (verified DOM structure)
+    const commentArticles = document.querySelectorAll('article.comments-comment-entity');
+    for (const article of commentArticles) {
+      // Author link: <a href="/in/slug"> inside the comment meta section
+      const authorLink = article.querySelector('a[href*="/in/"]');
       if (!authorLink) continue;
 
       const href = authorLink.getAttribute('href') || '';
@@ -134,14 +146,16 @@
       if (!usernameMatch) continue;
 
       const username = usernameMatch[1];
-      const displayName = authorLink.textContent.trim().split('\n')[0].trim();
 
-      // Extract comment text
-      const commentTextEl = block.querySelector(
-        '.comments-comment-item__main-content, ' +
-        '.comments-comment-texteditor, ' +
-        '.feed-shared-text, ' +
-        'span.comments-comment-item__inline-show-more-text'
+      // Display name from the meta description title
+      const nameEl = article.querySelector('span.comments-comment-meta__description-title') ||
+                     authorLink;
+      const displayName = nameEl ? nameEl.textContent.trim().split('\n')[0].trim() : username;
+
+      // Comment text: <span class="comments-comment-item__main-content">
+      const commentTextEl = article.querySelector(
+        'span.comments-comment-item__main-content, ' +
+        'span.feed-shared-main-content--comment'
       );
       const commentText = commentTextEl ? commentTextEl.textContent.trim() : '';
 
@@ -159,7 +173,7 @@
       }
     }
 
-    // Fallback: try extracting from the feed/post comments with different selectors
+    // Strategy 2: Fallback — find all /in/ links within any comment-like container
     if (users.size === 0) {
       const allLinks = document.querySelectorAll('a[href*="/in/"]');
       const seenUsernames = new Set();
@@ -173,15 +187,17 @@
         if (seenUsernames.has(username)) continue;
         seenUsernames.add(username);
 
-        // Check if this link is within a comment context
+        // Walk up to find a comment container (article or div with comment-related class/data)
         const parentComment = link.closest(
-          '.comments-comment-item, .comments-comment-entity, ' +
-          '[class*="comment"], [data-id*="comment"]'
+          'article, [data-id*="comment"], [class*="comment"]'
         );
         if (!parentComment) continue;
 
+        // Get comment text from nearby span/div
         const textEl = parentComment.querySelector(
-          '[class*="comment-text"], [class*="main-content"], span[dir="ltr"]'
+          'span.comments-comment-item__main-content, ' +
+          'span.feed-shared-main-content--comment, ' +
+          'span[dir="ltr"], div[dir="ltr"]'
         );
         const text = textEl ? textEl.textContent.trim() : '';
         const textLower = text.toLowerCase();
@@ -215,55 +231,64 @@
     let isPending = false;
     let isConnected = false;
 
-    // Check all buttons on the profile page
-    const buttons = document.querySelectorAll(
-      'button, div[role="button"], a[role="button"]'
-    );
+    // IMPORTANT: LinkedIn profile uses BOTH <a> and <button> tags for actions
+    // Connect = <a> with aria-label="Invite X to connect"
+    // Message = <a> with text "Message" and href="/messaging/compose/"
+    // Follow = <button> with aria-label="Follow X"
 
-    for (const btn of buttons) {
-      const text = btn.textContent.trim().toLowerCase();
-      const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+    // Check <a> tags (Connect and Message are <a> tags on profiles!)
+    const allLinks = document.querySelectorAll('a');
+    for (const link of allLinks) {
+      const text = link.textContent.trim();
+      const ariaLabel = (link.getAttribute('aria-label') || '');
+      const href = link.getAttribute('href') || '';
 
-      // Message button
-      if (text === 'message' || ariaLabel.includes('message')) {
-        hasMessage = true;
-      }
-
-      // Connect button
-      if (text === 'connect' || ariaLabel.includes('connect')) {
+      // Connect: <a aria-label="Invite X to connect">
+      if (ariaLabel.toLowerCase().includes('invite') && ariaLabel.toLowerCase().includes('to connect')) {
+        hasConnect = true;
+      } else if (text === 'Connect' && href.includes('/preload/custom-invite/')) {
         hasConnect = true;
       }
 
-      // Follow button (different from Connect on LinkedIn)
-      if (text === 'follow' || ariaLabel.includes('follow')) {
-        hasFollow = true;
-      }
-
-      // Pending connection
-      if (text === 'pending' || text.includes('pending') || ariaLabel.includes('pending')) {
-        isPending = true;
-      }
-
-      // Already connected indicators
-      if (text.includes('connected') || ariaLabel.includes('connected')) {
-        isConnected = true;
+      // Message: <a> with text "Message" and href to /messaging/compose/
+      if (text === 'Message' && href.includes('/messaging/')) {
+        hasMessage = true;
       }
     }
 
-    // Also check for "More" dropdown which may contain Connect/Message
-    const moreBtn = document.querySelector(
-      'button[aria-label="More actions"], ' +
-      'button.artdeco-dropdown__trigger'
-    );
+    // Check <button> tags (Follow, Pending, More)
+    const allButtons = document.querySelectorAll('button');
+    for (const btn of allButtons) {
+      const text = btn.textContent.trim();
+      const ariaLabel = (btn.getAttribute('aria-label') || '');
 
-    // Check the connection degree indicator
-    const degreeEl = document.querySelector(
-      '.dist-value, .distance-badge, span[class*="degree"]'
-    );
-    const degreeText = degreeEl ? degreeEl.textContent.trim() : '';
-    if (degreeText.includes('1st')) {
+      // Follow: <button aria-label="Follow X">
+      if (ariaLabel.toLowerCase().startsWith('follow ') || text === 'Follow') {
+        hasFollow = true;
+      }
+
+      // Pending: button text or aria-label
+      if (text === 'Pending' || text.toLowerCase().includes('pending') ||
+          ariaLabel.toLowerCase().includes('pending')) {
+        isPending = true;
+      }
+
+      // Message button (sometimes it's a button too)
+      if (text === 'Message' || ariaLabel.toLowerCase() === 'message') {
+        hasMessage = true;
+      }
+    }
+
+    // Check connection degree from page text
+    const pageText = document.body.innerText || '';
+    if (pageText.includes('· 1st')) {
       isConnected = true;
-      hasMessage = true; // 1st degree connections can always be messaged
+      hasMessage = true; // 1st degree can always message
+    }
+
+    // If we see "Connected" text near the action buttons
+    if (findElementByText('button, span', 'Connected', true)) {
+      isConnected = true;
     }
 
     return {
@@ -282,35 +307,44 @@
   // ════════════════════════════════════════════════════════════
 
   async function handleClickConnectButton(note) {
-    // Find and click the Connect button
-    const buttons = document.querySelectorAll('button, div[role="button"]');
-    let connectBtn = null;
+    // LinkedIn Connect button is an <a> tag with aria-label="Invite X to connect"
+    // or text "Connect" with href to /preload/custom-invite/
+    let connectEl = null;
 
-    for (const btn of buttons) {
-      const text = btn.textContent.trim().toLowerCase();
-      const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
-      if (text === 'connect' || ariaLabel.includes('connect')) {
-        connectBtn = btn;
-        break;
+    // Strategy 1: Find <a> with aria-label "Invite X to connect"
+    connectEl = findByAriaLabel('a', 'to connect');
+
+    // Strategy 2: Find <a> with text "Connect" and custom-invite href
+    if (!connectEl) {
+      const links = document.querySelectorAll('a');
+      for (const link of links) {
+        const text = link.textContent.trim();
+        const href = link.getAttribute('href') || '';
+        if (text === 'Connect' && href.includes('/preload/custom-invite/')) {
+          connectEl = link;
+          break;
+        }
       }
     }
 
-    // If no direct Connect button, check the "More" dropdown
-    if (!connectBtn) {
-      const moreBtn = document.querySelector(
-        'button[aria-label="More actions"], ' +
-        'button[aria-label*="More"], ' +
-        'button.artdeco-dropdown__trigger'
-      );
+    // Strategy 3: Find <button> with text "Connect" (sidebar suggestions use buttons)
+    if (!connectEl) {
+      connectEl = findByAriaLabel('button', 'to connect');
+    }
+    if (!connectEl) {
+      connectEl = findElementByText('button', 'Connect', true);
+    }
+
+    // Strategy 4: Check the "More" dropdown for Connect option
+    if (!connectEl) {
+      const moreBtn = findByAriaLabel('button', 'More');
       if (moreBtn) {
         moreBtn.click();
         await sleep(800);
 
-        // Look for Connect in the dropdown
-        const dropdownItems = document.querySelectorAll(
-          '.artdeco-dropdown__content li, [role="menuitem"], .pvs-overflow-actions-dropdown__content li'
-        );
-        for (const item of dropdownItems) {
+        // Look for Connect in the dropdown menu
+        const menuItems = document.querySelectorAll('[role="menuitem"], [role="option"], li');
+        for (const item of menuItems) {
           const text = item.textContent.trim().toLowerCase();
           if (text.includes('connect')) {
             item.click();
@@ -319,47 +353,60 @@
           }
         }
       }
-    } else {
-      connectBtn.click();
-      await sleep(800);
+    }
+
+    if (connectEl) {
+      connectEl.click();
+      await sleep(1000);
     }
 
     // Handle the connection modal
-    // LinkedIn may show "How do you know [name]?" or "Add a note" modal
-    await sleep(1000);
+    // LinkedIn shows a modal with "Add a note" option
+    await sleep(1500);
 
     if (note) {
-      // Click "Add a note" button if available
-      const addNoteBtn = document.querySelector(
-        'button[aria-label="Add a note"], ' +
-        'button.artdeco-button--secondary'
-      );
-      
-      if (addNoteBtn && addNoteBtn.textContent.trim().toLowerCase().includes('add a note')) {
+      // Click "Add a note" button
+      const addNoteBtn = findElementByText('button', 'Add a note', false);
+      if (addNoteBtn) {
         addNoteBtn.click();
-        await sleep(500);
+        await sleep(800);
 
-        // Type the note in the textarea
-        const noteInput = document.querySelector(
-          'textarea[name="message"], ' +
-          'textarea#custom-message, ' +
-          'textarea.connect-button-send-invite__custom-message'
-        );
+        // Find the note textarea — try multiple selectors
+        let noteInput = document.querySelector('textarea[name="message"]') ||
+                        document.querySelector('textarea#custom-message') ||
+                        document.querySelector('textarea.connect-button-send-invite__custom-message');
+
+        // Fallback: find any visible textarea in the modal
+        if (!noteInput) {
+          const textareas = document.querySelectorAll('textarea');
+          for (const ta of textareas) {
+            if (ta.offsetParent !== null) { // visible
+              noteInput = ta;
+              break;
+            }
+          }
+        }
+
         if (noteInput) {
           noteInput.focus();
-          noteInput.value = note;
-          noteInput.dispatchEvent(new Event('input', { bubbles: true }));
+          noteInput.value = '';
+          // Type character by character for React compatibility
+          for (const char of note) {
+            noteInput.value += char;
+            noteInput.dispatchEvent(new Event('input', { bubbles: true }));
+          }
           await sleep(300);
         }
       }
     }
 
-    // Click "Send" or "Send without a note"
+    // Click "Send" / "Send invitation" / "Send without a note"
     await sleep(500);
-    const sendBtns = document.querySelectorAll('button[aria-label*="Send"], button');
-    for (const btn of sendBtns) {
+    const allBtns = document.querySelectorAll('button');
+    for (const btn of allBtns) {
       const text = btn.textContent.trim().toLowerCase();
-      if (text === 'send' || text === 'send now' || text.includes('send invitation') || text.includes('send without')) {
+      if ((text === 'send' || text === 'send now' || text.includes('send invitation') ||
+           text.includes('send without')) && !btn.disabled) {
         btn.click();
         await sleep(500);
         return { success: true, status: 'Pending', alreadyFollowing: false };
@@ -375,16 +422,16 @@
   // ════════════════════════════════════════════════════════════
 
   async function handleClickFollowButton() {
-    const buttons = document.querySelectorAll('button, div[role="button"]');
-    
-    for (const btn of buttons) {
-      const text = btn.textContent.trim().toLowerCase();
-      const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
-      if (text === 'follow' || ariaLabel.includes('follow')) {
-        btn.click();
-        await sleep(1000);
-        return { success: true, status: 'Following', alreadyFollowing: false };
-      }
+    // Follow button is a <button> with aria-label="Follow X"
+    let followBtn = findByAriaLabel('button', 'Follow ');
+    if (!followBtn) {
+      followBtn = findElementByText('button', 'Follow', true);
+    }
+
+    if (followBtn) {
+      followBtn.click();
+      await sleep(1000);
+      return { success: true, status: 'Following', alreadyFollowing: false };
     }
 
     return { success: false, error: 'No Follow button found' };
@@ -396,16 +443,26 @@
 
   async function handleCheckForMessageButton() {
     // After connecting, check if Message button is available
-    // (only works for 1st degree connections)
     for (let attempt = 0; attempt < 10; attempt++) {
-      const buttons = document.querySelectorAll('button, div[role="button"]');
-      for (const btn of buttons) {
-        const text = btn.textContent.trim().toLowerCase();
-        const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
-        if (text === 'message' || ariaLabel.includes('message')) {
+      // Check <a> tags (LinkedIn Message is usually an <a>)
+      const links = document.querySelectorAll('a');
+      for (const link of links) {
+        const text = link.textContent.trim();
+        const href = link.getAttribute('href') || '';
+        if (text === 'Message' && href.includes('/messaging/')) {
           return { found: true };
         }
       }
+
+      // Also check buttons
+      const buttons = document.querySelectorAll('button');
+      for (const btn of buttons) {
+        const text = btn.textContent.trim();
+        if (text === 'Message') {
+          return { found: true };
+        }
+      }
+
       await sleep(500);
     }
     return { found: false };
@@ -416,49 +473,72 @@
   // ════════════════════════════════════════════════════════════
 
   async function handleClickMessageButton() {
-    const buttons = document.querySelectorAll('button, div[role="button"]');
-    
-    for (const btn of buttons) {
-      const text = btn.textContent.trim().toLowerCase();
-      const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
-      if (text === 'message' || ariaLabel.includes('message')) {
-        btn.click();
-        await sleep(1500); // Wait for messaging overlay to open
+    // Message button is an <a> with text "Message" and href to /messaging/compose/
+    const links = document.querySelectorAll('a');
+    for (const link of links) {
+      const text = link.textContent.trim();
+      const href = link.getAttribute('href') || '';
+      if (text === 'Message' && href.includes('/messaging/')) {
+        link.click();
+        await sleep(2000); // Wait for messaging overlay to open
         return { success: true };
       }
+    }
+
+    // Fallback: try button
+    const msgBtn = findElementByText('button', 'Message', true);
+    if (msgBtn) {
+      msgBtn.click();
+      await sleep(2000);
+      return { success: true };
     }
 
     return { error: 'No Message button found' };
   }
 
   // ════════════════════════════════════════════════════════════
-  //  ACTION 7: TYPE AND SEND DM (LinkedIn messaging overlay)
+  //  ACTION 7: TYPE AND SEND DM (LinkedIn messaging)
   // ════════════════════════════════════════════════════════════
 
   async function handleTypeAndSendDM(message) {
     if (!message) return { error: 'No message provided' };
 
-    // Wait for the messaging overlay/panel to open
-    await sleep(1500);
+    // Wait for the messaging overlay/page to open
+    await sleep(2000);
 
-    // Find the message input in LinkedIn's messaging overlay
-    const inputSelectors = [
-      'div.msg-form__contenteditable[contenteditable="true"]',
-      'div[role="textbox"][contenteditable="true"]',
-      'div.msg-form__msg-content-container div[contenteditable]',
-      'div[data-placeholder="Write a message…"]',
-      'div[aria-label="Write a message…"]',
-      'div[aria-label*="Write a message"]',
-      'div.msg-form__placeholder + div[contenteditable]'
-    ];
+    // LinkedIn has TWO different message input types:
+    // 1. Overlay (bottom-right): div.msg-form__contenteditable (contenteditable)
+    // 2. Full page (/messaging/): textarea[role="textbox"] with hint "Write a message..."
 
     let input = null;
+    let inputType = null; // 'contenteditable' or 'textarea'
+
     for (let attempt = 0; attempt < 20; attempt++) {
-      for (const sel of inputSelectors) {
-        input = document.querySelector(sel);
-        if (input) break;
+      // Try textarea first (full messaging page)
+      input = document.querySelector('textarea[role="textbox"]');
+      if (input) {
+        inputType = 'textarea';
+        break;
       }
-      if (input) break;
+
+      // Try contenteditable div (overlay)
+      input = document.querySelector('div.msg-form__contenteditable[contenteditable="true"]');
+      if (input) {
+        inputType = 'contenteditable';
+        break;
+      }
+
+      // Try generic contenteditable with message-related attributes
+      input = document.querySelector(
+        'div[role="textbox"][contenteditable="true"], ' +
+        'div[aria-label*="Write a message"][contenteditable="true"], ' +
+        'div[data-placeholder*="Write a message"][contenteditable="true"]'
+      );
+      if (input) {
+        inputType = 'contenteditable';
+        break;
+      }
+
       await sleep(500);
     }
 
@@ -466,47 +546,51 @@
       return { error: 'Could not find message input on LinkedIn' };
     }
 
-    // Focus and type the message
+    // Focus the input
     input.focus();
     await sleep(300);
 
-    // Clear existing content
-    input.innerHTML = '';
-    await sleep(100);
+    if (inputType === 'textarea') {
+      // For textarea: set value and dispatch events
+      input.value = '';
+      // Use execCommand for React compatibility
+      document.execCommand('selectAll', false, null);
+      document.execCommand('delete', false, null);
+      await sleep(100);
 
-    // Type message with line breaks using <p> tags (LinkedIn uses paragraph blocks)
-    const lines = message.split('\n');
-    const htmlContent = lines.map(line => `<p>${line || '<br>'}</p>`).join('');
-    input.innerHTML = htmlContent;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    await sleep(300);
+      // Type the message
+      for (const char of message) {
+        input.value += char;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      await sleep(300);
+    } else {
+      // For contenteditable: use innerHTML with <p> tags for line breaks
+      input.innerHTML = '';
+      await sleep(100);
 
-    // Count messages before sending (for verification)
-    const msgListBefore = document.querySelectorAll(
-      '.msg-s-message-list__event, .msg-s-event-listitem'
-    );
-    const countBefore = msgListBefore.length;
-
-    // Find and click Send button
-    const sendSelectors = [
-      'button.msg-form__send-button',
-      'button[aria-label="Send"]',
-      'button[type="submit"].msg-form__send-button',
-      'button.msg-form__send-btn'
-    ];
-
-    let sendBtn = null;
-    for (const sel of sendSelectors) {
-      sendBtn = document.querySelector(sel);
-      if (sendBtn && !sendBtn.disabled) break;
-      sendBtn = null;
+      const lines = message.split('\n');
+      const htmlContent = lines.map(line => `<p>${line || '<br>'}</p>`).join('');
+      input.innerHTML = htmlContent;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      await sleep(300);
     }
 
+    // Find and click Send button — it's a <button> with text "Send"
+    let sendBtn = null;
+
+    // Try specific selectors first
+    sendBtn = document.querySelector('button.msg-form__send-button:not([disabled])');
     if (!sendBtn) {
-      // Try finding by text content
+      sendBtn = document.querySelector('button[aria-label="Send"]:not([disabled])');
+    }
+
+    // Fallback: find by text
+    if (!sendBtn) {
       const allBtns = document.querySelectorAll('button');
       for (const btn of allBtns) {
-        if (btn.textContent.trim().toLowerCase() === 'send' && !btn.disabled) {
+        if (btn.textContent.trim() === 'Send' && !btn.disabled) {
           sendBtn = btn;
           break;
         }
@@ -520,20 +604,14 @@
     sendBtn.click();
     await sleep(2000);
 
-    // Verify send by checking if message count increased
-    const msgListAfter = document.querySelectorAll(
-      '.msg-s-message-list__event, .msg-s-event-listitem'
-    );
-    const countAfter = msgListAfter.length;
-
-    if (countAfter > countBefore) {
-      return { success: true };
-    }
-
-    // Check if input was cleared (another sign of success)
-    const inputAfter = document.querySelector(inputSelectors[0]) || input;
-    if (inputAfter && inputAfter.textContent.trim() === '') {
-      return { success: true };
+    // Verify: check if input was cleared (sign of successful send)
+    const inputAfter = document.querySelector('textarea[role="textbox"]') ||
+                       document.querySelector('div.msg-form__contenteditable');
+    if (inputAfter) {
+      const remainingText = inputType === 'textarea' ? inputAfter.value : inputAfter.textContent;
+      if (!remainingText || remainingText.trim() === '') {
+        return { success: true };
+      }
     }
 
     return { success: true, warning: 'Message sent but could not verify delivery' };
@@ -544,8 +622,6 @@
   // ════════════════════════════════════════════════════════════
 
   async function handleCheckIfPrivate() {
-    // On LinkedIn, "private" means you can't message them (not 1st degree)
-    // Check connection degree
     const pageText = document.body.innerText || '';
 
     // Check for restricted profile indicators
@@ -562,28 +638,26 @@
       }
     }
 
-    // Check if it's a 2nd/3rd degree connection (can't message directly)
-    const degreeEl = document.querySelector(
-      '.dist-value, .distance-badge, span[class*="degree"], ' +
-      '.pv-top-card--list span.text-body-small'
-    );
-    const degreeText = degreeEl ? degreeEl.textContent.trim() : '';
-
-    if (degreeText.includes('2nd') || degreeText.includes('3rd') || degreeText.includes('3rd+')) {
-      // Not truly "private" but can't message directly — need to connect first
-      return { isPrivate: false, canMessage: false, degree: degreeText };
-    }
-
-    if (degreeText.includes('1st')) {
+    // Check connection degree from page text
+    if (pageText.includes('· 1st')) {
       return { isPrivate: false, canMessage: true, degree: '1st' };
     }
+    if (pageText.includes('· 2nd')) {
+      return { isPrivate: false, canMessage: false, degree: '2nd' };
+    }
+    if (pageText.includes('· 3rd') || pageText.includes('· 3rd+')) {
+      return { isPrivate: false, canMessage: false, degree: '3rd' };
+    }
 
-    // If no degree info found, check for Message button presence
-    const buttons = document.querySelectorAll('button');
-    for (const btn of buttons) {
-      if (btn.textContent.trim().toLowerCase() === 'message') {
+    // Check for Message button presence (as <a> or <button>)
+    const links = document.querySelectorAll('a');
+    for (const link of links) {
+      if (link.textContent.trim() === 'Message' && (link.getAttribute('href') || '').includes('/messaging/')) {
         return { isPrivate: false, canMessage: true };
       }
+    }
+    if (findElementByText('button', 'Message', true)) {
+      return { isPrivate: false, canMessage: true };
     }
 
     return { isPrivate: false, canMessage: false, reason: 'No message button and unknown degree' };
