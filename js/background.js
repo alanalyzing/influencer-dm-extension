@@ -166,6 +166,29 @@ function connectActionName(platform) {
   }
 }
 
+// ─── LinkedIn: Get display name from profile page (with retry + fallbacks) ───
+async function getLinkedInDisplayName(tabId, usernameSlug) {
+  let displayName = '';
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const profileInfo = await sendToTab(tabId, { action: 'getProfileInfo' });
+    if (profileInfo?.fullName) {
+      displayName = profileInfo.fullName;
+      break;
+    }
+    // Re-inject content script and retry after a longer wait
+    await delay(2000);
+    await injectContentScript(tabId, 'linkedin');
+    await delay(1000);
+  }
+  // Final fallback: derive from username/URL slug ("amanda-cua" → "Amanda Cua")
+  if (!displayName && usernameSlug) {
+    displayName = usernameSlug
+      .replace(/[-_]/g, ' ')
+      .replace(/\b\w/g, c => c.toUpperCase());
+  }
+  return displayName;
+}
+
 // ─── LinkedIn: Send DM via compose page (bypasses unreliable overlay) ───
 // Reusable helper used by runDMLoop, runBulkOutreachLoop, waitlist recheck, cadence
 async function linkedinComposeDM(tabId, displayName, message, progressFn) {
@@ -460,11 +483,9 @@ async function runDMLoop() {
 
       // ── LINKEDIN: Compose-page approach (bypasses unreliable overlay) ──
       if (dmPlatform === 'linkedin') {
-        // Step 1: Get display name from profile page
+        // Step 1: Get display name from profile page (with retry + fallbacks)
         broadcastDMProgress(user.username, 'clickingMessage', 'Reading profile name...');
-        const profileInfo = await sendToTab(state.tabId, { action: 'getProfileInfo' });
-        const displayName = profileInfo?.fullName;
-
+        const displayName = await getLinkedInDisplayName(state.tabId, user.username);
         if (!displayName) {
           throw new Error('Could not read display name from LinkedIn profile');
         }
@@ -700,8 +721,7 @@ async function runBulkOutreachLoop() {
         if (platform === 'linkedin') {
           // LinkedIn: compose-page approach (bypasses unreliable overlay)
           broadcastBOProgress(user.username, 'dm-direct', 'Reading profile name...');
-          const profileInfo = await sendToTab(boState.tabId, { action: 'getProfileInfo' });
-          const displayName = profileInfo?.fullName;
+          const displayName = await getLinkedInDisplayName(boState.tabId, user.username);
           if (!displayName) throw new Error('Could not read display name from LinkedIn profile');
 
           typeResult = await linkedinComposeDM(boState.tabId, displayName, personalizedMsg, (msg) => {
@@ -910,8 +930,7 @@ async function runBulkOutreachLoop() {
             // Message button appeared → DM now
             if (platform === 'linkedin') {
               // LinkedIn: use compose-page approach
-              const profileInfo = await sendToTab(boState.tabId, { action: 'getProfileInfo' });
-              const displayName = profileInfo?.fullName;
+              const displayName = await getLinkedInDisplayName(boState.tabId, user.username);
               if (!displayName) throw new Error('Could not read display name from LinkedIn profile');
               const typeResult = await linkedinComposeDM(boState.tabId, displayName, personalizedMsg, (msg) => {
                 broadcastBOProgress(user.username, 'dm-direct', msg);
@@ -1203,8 +1222,7 @@ async function processCadenceQueue() {
       if (profileCheck && profileCheck.hasMessage) {
         if (itemDMPlat === 'linkedin') {
           // LinkedIn: compose-page approach
-          const profileInfo = await sendToTab(tab.id, { action: 'getProfileInfo' });
-          const displayName = profileInfo?.fullName;
+          const displayName = await getLinkedInDisplayName(tab.id, item.username);
           if (!displayName) throw new Error('Could not read display name from LinkedIn profile');
           await linkedinComposeDM(tab.id, displayName, personalizedMsg);
         } else {
@@ -1311,8 +1329,7 @@ async function runWaitlistRecheck(waitlist, platform) {
 
           if (dmPlat === 'linkedin') {
             // LinkedIn: compose-page approach
-            const profileInfo = await sendToTab(boState.tabId, { action: 'getProfileInfo' });
-            const displayName = profileInfo?.fullName;
+            const displayName = await getLinkedInDisplayName(boState.tabId, user.username);
             if (!displayName) throw new Error('Could not read display name from LinkedIn profile');
             await linkedinComposeDM(boState.tabId, displayName, personalizedMsg);
           } else {

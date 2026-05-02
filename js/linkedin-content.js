@@ -890,11 +890,55 @@
   // ════════════════════════════════════════════════════════════
 
   async function handleGetProfileInfo() {
-    await sleep(1000);
+    // Wait for profile to render — LinkedIn Ember.js can be slow
+    await sleep(2000);
 
-    // Extract display name from h1
-    const h1 = document.querySelector('h1');
-    const fullName = h1 ? h1.textContent.trim() : '';
+    // Extract display name from h1 with retry (LinkedIn renders lazily)
+    let fullName = '';
+    for (let attempt = 0; attempt < 15; attempt++) {
+      // Try multiple selectors for the profile name
+      const h1 = document.querySelector('h1');
+      if (h1) {
+        const text = h1.textContent.trim();
+        // Filter out generic h1s that aren't the profile name
+        if (text && text !== 'LinkedIn' && text.length > 1 && text.length < 80) {
+          fullName = text;
+          break;
+        }
+      }
+      // Fallback: try the profile card name element
+      const nameEl = document.querySelector('[class*="text-heading-xlarge"]') ||
+                     document.querySelector('[class*="inline t-24"]') ||
+                     document.querySelector('.pv-text-details__left-panel h1') ||
+                     document.querySelector('[data-anonymize="person-name"]');
+      if (nameEl) {
+        const text = nameEl.textContent.trim();
+        if (text && text.length > 1) {
+          fullName = text;
+          break;
+        }
+      }
+      await sleep(500);
+    }
+
+    // Fallback: extract from page title ("FirstName LastName | LinkedIn")
+    if (!fullName) {
+      const titleMatch = document.title.match(/^(.+?)\s*[|\-–]\s*LinkedIn/i);
+      if (titleMatch) {
+        fullName = titleMatch[1].trim();
+      }
+    }
+
+    // Fallback: extract from URL slug ("amanda-cua" → "Amanda Cua")
+    if (!fullName) {
+      const urlMatch = window.location.pathname.match(/\/in\/([^/]+)/);
+      if (urlMatch) {
+        fullName = urlMatch[1]
+          .replace(/-/g, ' ')
+          .replace(/\b\w/g, c => c.toUpperCase());
+      }
+    }
+
     const firstName = fullName.split(' ')[0] || '';
 
     // Extract headline (usually the text below the name)
