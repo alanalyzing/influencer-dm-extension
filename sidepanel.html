@@ -14,7 +14,7 @@
       <img src="icons/icon48.png" alt="" class="header-icon" />
       <div class="header-text">
         <h1>Influencer DM Manager</h1>
-        <span class="header-version">v11.2</span>
+        <span class="header-version">v11.3</span>
       </div>
     </div>
   </header>
@@ -91,26 +91,6 @@
   <!-- ║  MODE 1: SEND DMs                         ║ -->
   <!-- ╚══════════════════════════════════════════╝ -->
   <div id="modeOutreach" class="mode-panel active">
-
-    <!-- ─── Outreach Progress (pinned at top) ─── -->
-    <div id="boProgress" class="progress-card" style="display:none">
-      <div class="card-header">
-        <h2>Outreach Progress</h2>
-        <div id="boStatusBadge" class="status-badge running">Running</div>
-      </div>
-      <div class="card-body">
-        <div class="progress-bar"><div id="boProgressBar" class="progress-fill"></div></div>
-        <p id="boStatusText" class="summary-text">Preparing...</p>
-        <div id="boLiveLog" class="live-log"></div>
-        <div id="boActiveActions" class="btn-row">
-          <button id="btnPauseOutreach" class="btn btn-secondary">Pause</button>
-          <button id="btnBackFromOutreach" class="btn btn-secondary" style="display:none">Back</button>
-        </div>
-        <div id="boDoneActions" class="btn-row" style="display:none">
-          <button id="btnNewOutreach" class="btn btn-primary btn-full">+ New Outreach</button>
-        </div>
-      </div>
-    </div>
 
     <!-- Sub-tabs -->
     <nav class="sub-tabs">
@@ -366,6 +346,26 @@
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
             Start Outreach
           </button>
+
+          <!-- Outreach Progress (appears below Start Outreach after clicking) -->
+          <div id="boProgress" class="progress-card" style="display:none; margin-top:12px">
+            <div class="card-header">
+              <h2>Outreach Progress</h2>
+              <div id="boStatusBadge" class="status-badge running">Running</div>
+            </div>
+            <div class="card-body">
+              <div class="progress-bar"><div id="boProgressBar" class="progress-fill"></div></div>
+              <p id="boStatusText" class="summary-text">Preparing...</p>
+              <div id="boLiveLog" class="live-log"></div>
+              <div id="boActiveActions" class="btn-row">
+                <button id="btnPauseOutreach" class="btn btn-secondary">Pause</button>
+                <button id="btnBackFromOutreach" class="btn btn-secondary" style="display:none">Back</button>
+              </div>
+              <div id="boDoneActions" class="btn-row" style="display:none">
+                <button id="btnNewOutreach" class="btn btn-primary btn-full">+ New Outreach</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </section>

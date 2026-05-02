@@ -166,6 +166,32 @@ function connectActionName(platform) {
   }
 }
 
+// ─── LinkedIn: Send DM via compose page (bypasses unreliable overlay) ───
+// Reusable helper used by runDMLoop, runBulkOutreachLoop, waitlist recheck, cadence
+async function linkedinComposeDM(tabId, displayName, message, progressFn) {
+  if (!displayName) throw new Error('No display name for LinkedIn compose DM');
+
+  // Navigate to compose page
+  if (progressFn) progressFn('Opening messaging compose page...');
+  await chrome.tabs.update(tabId, { url: 'https://www.linkedin.com/messaging/thread/new/' });
+  await waitForTabLoad(tabId);
+  await delay(2000);
+  await injectContentScript(tabId, 'linkedin');
+  await delay(1000);
+
+  // Search for the recipient by display name
+  if (progressFn) progressFn(`Searching for ${displayName}...`);
+  const searchResult = await sendToTab(tabId, { action: 'searchAndSelectRecipient', displayName });
+  if (searchResult && searchResult.error) throw new Error(searchResult.error);
+
+  // Type and send the message
+  if (progressFn) progressFn('Typing message...');
+  await delay(1000);
+  const typeResult = await sendToTab(tabId, { action: 'typeAndSendDM', message });
+  if (typeResult && typeResult.error) throw new Error(typeResult.error);
+  return typeResult;
+}
+
 // ─── Open side panel when extension icon is clicked ───
 chrome.action.onClicked.addListener((tab) => {
   chrome.sidePanel.open({ tabId: tab.id });
@@ -432,13 +458,23 @@ async function runDMLoop() {
         }
       }
 
-      // LinkedIn-specific: use Connect if no Message button
-      const clickResult = await sendToTab(state.tabId, { action: 'clickMessageButton' });
+      // ── LINKEDIN: Compose-page approach (bypasses unreliable overlay) ──
+      if (dmPlatform === 'linkedin') {
+        // Step 1: Get display name from profile page
+        broadcastDMProgress(user.username, 'clickingMessage', 'Reading profile name...');
+        const profileInfo = await sendToTab(state.tabId, { action: 'getProfileInfo' });
+        const displayName = profileInfo?.fullName;
 
-      if (clickResult && clickResult.error && clickResult.noMessage) {
-        state.currentDMStep = 'following';
-        // B2 FIX: LinkedIn uses Connect with note (the message IS the connection note)
-        if (dmPlatform === 'linkedin') {
+        if (!displayName) {
+          throw new Error('Could not read display name from LinkedIn profile');
+        }
+
+        // Step 2: Check if Message button exists (without clicking it)
+        const profileCheck = await sendToTab(state.tabId, { action: 'checkProfileActions' });
+
+        if (!profileCheck || !profileCheck.hasMessage) {
+          // No Message button — fall back to Connect with note
+          state.currentDMStep = 'following';
           broadcastDMProgress(user.username, 'following', 'No Message button — sending connection request with note...');
           await delay(500);
           const connectResult = await sendToTab(state.tabId, { action: 'clickConnectButton', note: personalizedMsg });
@@ -469,38 +505,52 @@ async function runDMLoop() {
           }
           continue;
         }
-        broadcastDMProgress(user.username, 'following', 'No Message button — following user instead...');
-        await delay(500);
-        const followResult = await sendToTab(state.tabId, { action: 'clickFollowButton' });
-        const followStatus = followResult?.status || 'unknown';
-        const alreadyFollowing = followResult?.alreadyFollowing || false;
-        await savePendingFollow({ username: user.username, comment: user.comment || '', matchedKeyword: user.matchedKeyword || '', followStatus, alreadyFollowing, timestamp: new Date().toISOString() });
-        state.currentDMStep = 'followed';
-        const statusMsg = alreadyFollowing ? `Already following @${user.username} — saved to retry queue` : `Followed @${user.username} (${followStatus}) — saved to retry queue`;
-        broadcastDMProgress(user.username, 'followed', statusMsg);
-        const logEntry = { username: user.username, status: 'followed', message: statusMsg, timestamp: Date.now(), viewed: true, followed: true, platform: state.platform };
-        state.sentLog.push(logEntry);
-        await saveDMHistory(logEntry);
-        state.currentIndex++;
-        if (state.status === 'sending' && state.currentIndex < state.selectedUsers.length) {
-          broadcastDMProgress('', 'waiting', `Waiting ${state.delaySeconds}s before next user...`);
-          await delay(state.delaySeconds * 1000, true, () => state.status !== 'sending');
+
+        // Step 3: Message button exists — use compose page approach
+        state.currentDMStep = 'waitingDM';
+        await linkedinComposeDM(state.tabId, displayName, personalizedMsg, (msg) => {
+          broadcastDMProgress(user.username, 'waitingDM', msg);
+        });
+        state.currentDMStep = 'typing';
+
+      } else {
+        // ── NON-LINKEDIN: Original overlay approach ──
+        const clickResult = await sendToTab(state.tabId, { action: 'clickMessageButton' });
+
+        if (clickResult && clickResult.error && clickResult.noMessage) {
+          broadcastDMProgress(user.username, 'following', 'No Message button — following user instead...');
+          await delay(500);
+          const followResult = await sendToTab(state.tabId, { action: 'clickFollowButton' });
+          const followStatus = followResult?.status || 'unknown';
+          const alreadyFollowing = followResult?.alreadyFollowing || false;
+          await savePendingFollow({ username: user.username, comment: user.comment || '', matchedKeyword: user.matchedKeyword || '', followStatus, alreadyFollowing, timestamp: new Date().toISOString() });
+          state.currentDMStep = 'followed';
+          const statusMsg = alreadyFollowing ? `Already following @${user.username} — saved to retry queue` : `Followed @${user.username} (${followStatus}) — saved to retry queue`;
+          broadcastDMProgress(user.username, 'followed', statusMsg);
+          const logEntry = { username: user.username, status: 'followed', message: statusMsg, timestamp: Date.now(), viewed: true, followed: true, platform: state.platform };
+          state.sentLog.push(logEntry);
+          await saveDMHistory(logEntry);
+          state.currentIndex++;
+          if (state.status === 'sending' && state.currentIndex < state.selectedUsers.length) {
+            broadcastDMProgress('', 'waiting', `Waiting ${state.delaySeconds}s before next user...`);
+            await delay(state.delaySeconds * 1000, true, () => state.status !== 'sending');
+          }
+          continue;
+        } else if (clickResult && clickResult.error) {
+          throw new Error(clickResult.error);
         }
-        continue;
-      } else if (clickResult && clickResult.error) {
-        throw new Error(clickResult.error);
+
+        state.currentDMStep = 'waitingDM';
+        broadcastDMProgress(user.username, 'waitingDM', 'Waiting for DM conversation to open...');
+        await delay(3000);
+        await injectContentScript(state.tabId, dmPlatform);
+        await delay(1000);
+
+        state.currentDMStep = 'typing';
+        broadcastDMProgress(user.username, 'typing', 'Typing message...');
+        const typeResult = await sendToTab(state.tabId, { action: 'typeAndSendDM', message: personalizedMsg });
+        if (typeResult && typeResult.error) throw new Error(typeResult.error);
       }
-
-      state.currentDMStep = 'waitingDM';
-      broadcastDMProgress(user.username, 'waitingDM', 'Waiting for DM conversation to open...');
-      await delay(3000);
-      await injectContentScript(state.tabId, dmPlatform);
-      await delay(1000);
-
-      state.currentDMStep = 'typing';
-      broadcastDMProgress(user.username, 'typing', 'Typing message...');
-      const typeResult = await sendToTab(state.tabId, { action: 'typeAndSendDM', message: personalizedMsg });
-      if (typeResult && typeResult.error) throw new Error(typeResult.error);
 
       state.currentDMStep = 'done';
       broadcastDMProgress(user.username, 'done', 'DM sent successfully!');
@@ -646,7 +696,18 @@ async function runBulkOutreachLoop() {
 
         // Platform-specific DM routing
         const dmPlatformBO = (platform === 'threads') ? 'instagram' : platform;
-        if (platform === 'threads') {
+        let typeResult;
+        if (platform === 'linkedin') {
+          // LinkedIn: compose-page approach (bypasses unreliable overlay)
+          broadcastBOProgress(user.username, 'dm-direct', 'Reading profile name...');
+          const profileInfo = await sendToTab(boState.tabId, { action: 'getProfileInfo' });
+          const displayName = profileInfo?.fullName;
+          if (!displayName) throw new Error('Could not read display name from LinkedIn profile');
+
+          typeResult = await linkedinComposeDM(boState.tabId, displayName, personalizedMsg, (msg) => {
+            broadcastBOProgress(user.username, 'dm-direct', msg);
+          });
+        } else if (platform === 'threads') {
           broadcastBOProgress(user.username, 'dm-direct', 'Message available — redirecting to Instagram for DM...');
           await chrome.tabs.update(boState.tabId, { url: dmProfileUrl(user.username, 'instagram') });
           await waitForTabLoad(boState.tabId);
@@ -655,19 +716,25 @@ async function runBulkOutreachLoop() {
           await delay(500);
           const igClickResult = await sendToTab(boState.tabId, { action: 'clickMessageButton' });
           if (igClickResult && igClickResult.error) throw new Error(igClickResult.error);
+
+          await delay(3000);
+          await injectContentScript(boState.tabId, 'instagram');
+          await delay(1000);
+          broadcastBOProgress(user.username, 'typing', 'Typing message...');
+          typeResult = await sendToTab(boState.tabId, { action: 'typeAndSendDM', message: personalizedMsg });
+          if (typeResult && typeResult.error) throw new Error(typeResult.error);
         } else {
           broadcastBOProgress(user.username, 'dm-direct', 'Message button found — clicking...');
           const clickResult = await sendToTab(boState.tabId, { action: 'clickMessageButton' });
           if (clickResult && clickResult.error) throw new Error(clickResult.error);
+
+          await delay(3000);
+          await injectContentScript(boState.tabId, dmPlatformBO);
+          await delay(1000);
+          broadcastBOProgress(user.username, 'typing', 'Typing message...');
+          typeResult = await sendToTab(boState.tabId, { action: 'typeAndSendDM', message: personalizedMsg });
+          if (typeResult && typeResult.error) throw new Error(typeResult.error);
         }
-
-        await delay(3000);
-        await injectContentScript(boState.tabId, dmPlatformBO);
-        await delay(1000);
-
-        broadcastBOProgress(user.username, 'typing', 'Typing message...');
-        const typeResult = await sendToTab(boState.tabId, { action: 'typeAndSendDM', message: personalizedMsg });
-        if (typeResult && typeResult.error) throw new Error(typeResult.error);
 
         // Check verification status from content script
         if (typeResult && typeResult.warning) {
@@ -841,63 +908,78 @@ async function runBulkOutreachLoop() {
 
           if (msgCheck && msgCheck.found) {
             // Message button appeared → DM now
-            broadcastBOProgress(user.username, 'dm-direct', 'Message button appeared — clicking...');
-            const clickResult = await sendToTab(boState.tabId, { action: 'clickMessageButton' });
-            if (clickResult && clickResult.error) throw new Error(clickResult.error);
-
-            await delay(3000);
-            await injectContentScript(boState.tabId, dmPlatAfterFollow);
-            await delay(1000);
-
-            // X-specific: if DMs closed after following, try tweet reply
-            if (platform === 'x') {
-              const dmAvailAfterFollow = await sendToTab(boState.tabId, { action: 'checkDMAvailability' });
-              if (dmAvailAfterFollow && !dmAvailAfterFollow.canDM && settings.xReplyFallback !== false) {
-                // Navigate to user's latest tweet first
-                broadcastBOProgress(user.username, 'replying', 'DMs closed — finding latest tweet for reply...');
-                const tweetUrlResult2 = await sendToTab(boState.tabId, { action: 'findLatestTweetUrl' });
-                if (!tweetUrlResult2 || !tweetUrlResult2.url) {
-                  throw new Error('DMs closed and no tweets found to reply to');
-                }
-                await chrome.tabs.update(boState.tabId, { url: tweetUrlResult2.url });
-                await waitForTabLoad(boState.tabId);
-                await delay(3000);
-                await injectContentScript(boState.tabId, 'x');
-                await delay(1000);
-                broadcastBOProgress(user.username, 'replying', 'Sending tweet reply...');
-                const replyResult = await sendToTab(boState.tabId, { action: 'typeAndSendReply', message: personalizedMsg });
-                if (replyResult && replyResult.error) throw new Error(replyResult.error);
-                broadcastBOProgress(user.username, 'done', 'Followed & reply sent (DMs closed)!');
-                boState.sentLog.push({ username: user.username, status: 'success', message: 'Followed & reply sent (DMs closed)', timestamp: Date.now() });
-                await saveDMHistory({
-                  username: user.username, status: 'replied', message: `Followed & reply sent (DMs closed) (${user.templateName})`,
-                  templateName: user.templateName, timestamp: Date.now(), viewed: true, followed: true, platform
-                });
-                if (boState.cadenceConfig && boState.cadenceConfig.intervals && boState.cadenceConfig.intervals.length > 0) {
-                  await scheduleCadenceFollowUps(user, boState.cadenceConfig);
-                }
-                boState.currentIndex++;
-                if (boState.status === 'sending' && boState.currentIndex < boState.outreachList.length) {
-                  broadcastBOProgress('', 'waiting', `Waiting ${boState.delaySeconds}s before next user...`);
-                  await delay(boState.delaySeconds * 1000, true, () => boState.status !== 'sending');
-                }
-                continue;
+            if (platform === 'linkedin') {
+              // LinkedIn: use compose-page approach
+              const profileInfo = await sendToTab(boState.tabId, { action: 'getProfileInfo' });
+              const displayName = profileInfo?.fullName;
+              if (!displayName) throw new Error('Could not read display name from LinkedIn profile');
+              const typeResult = await linkedinComposeDM(boState.tabId, displayName, personalizedMsg, (msg) => {
+                broadcastBOProgress(user.username, 'dm-direct', msg);
+              });
+              if (typeResult && typeResult.warning) {
+                broadcastBOProgress(user.username, 'done-warning', `Followed & DM sent (unverified) — ${typeResult.warning}`);
+                boState.sentLog.push({ username: user.username, status: 'success', message: 'Followed & DM sent (unverified)', timestamp: Date.now() });
+              } else {
+                broadcastBOProgress(user.username, 'done', `Followed & DM sent to @${user.username}!`);
+                boState.sentLog.push({ username: user.username, status: 'success', message: 'Followed & DM sent', timestamp: Date.now() });
+                recordHealthResult(true);
               }
-            }
-
-            broadcastBOProgress(user.username, 'typing', 'Typing message...');
-            const typeResult = await sendToTab(boState.tabId, { action: 'typeAndSendDM', message: personalizedMsg });
-            if (typeResult && typeResult.error) throw new Error(typeResult.error);
-
-            // Check verification status
-            if (typeResult && typeResult.warning) {
-              broadcastBOProgress(user.username, 'done-warning', `Followed & DM sent (unverified ⚠️) — ${typeResult.warning}`);
-              boState.sentLog.push({ username: user.username, status: 'success', message: 'Followed & DM sent (unverified)', timestamp: Date.now() });
-              // Unverified sends are likely successful — do NOT count as health failure
             } else {
-              broadcastBOProgress(user.username, 'done', `Followed & DM sent to @${user.username}!`);
-              boState.sentLog.push({ username: user.username, status: 'success', message: 'Followed & DM sent', timestamp: Date.now() });
-              recordHealthResult(true);
+              broadcastBOProgress(user.username, 'dm-direct', 'Message button appeared — clicking...');
+              const clickResult = await sendToTab(boState.tabId, { action: 'clickMessageButton' });
+              if (clickResult && clickResult.error) throw new Error(clickResult.error);
+
+              await delay(3000);
+              await injectContentScript(boState.tabId, dmPlatAfterFollow);
+              await delay(1000);
+
+              // X-specific: if DMs closed after following, try tweet reply
+              if (platform === 'x') {
+                const dmAvailAfterFollow = await sendToTab(boState.tabId, { action: 'checkDMAvailability' });
+                if (dmAvailAfterFollow && !dmAvailAfterFollow.canDM && settings.xReplyFallback !== false) {
+                  broadcastBOProgress(user.username, 'replying', 'DMs closed — finding latest tweet for reply...');
+                  const tweetUrlResult2 = await sendToTab(boState.tabId, { action: 'findLatestTweetUrl' });
+                  if (!tweetUrlResult2 || !tweetUrlResult2.url) {
+                    throw new Error('DMs closed and no tweets found to reply to');
+                  }
+                  await chrome.tabs.update(boState.tabId, { url: tweetUrlResult2.url });
+                  await waitForTabLoad(boState.tabId);
+                  await delay(3000);
+                  await injectContentScript(boState.tabId, 'x');
+                  await delay(1000);
+                  broadcastBOProgress(user.username, 'replying', 'Sending tweet reply...');
+                  const replyResult = await sendToTab(boState.tabId, { action: 'typeAndSendReply', message: personalizedMsg });
+                  if (replyResult && replyResult.error) throw new Error(replyResult.error);
+                  broadcastBOProgress(user.username, 'done', 'Followed & reply sent (DMs closed)!');
+                  boState.sentLog.push({ username: user.username, status: 'success', message: 'Followed & reply sent (DMs closed)', timestamp: Date.now() });
+                  await saveDMHistory({
+                    username: user.username, status: 'replied', message: `Followed & reply sent (DMs closed) (${user.templateName})`,
+                    templateName: user.templateName, timestamp: Date.now(), viewed: true, followed: true, platform
+                  });
+                  if (boState.cadenceConfig && boState.cadenceConfig.intervals && boState.cadenceConfig.intervals.length > 0) {
+                    await scheduleCadenceFollowUps(user, boState.cadenceConfig);
+                  }
+                  boState.currentIndex++;
+                  if (boState.status === 'sending' && boState.currentIndex < boState.outreachList.length) {
+                    broadcastBOProgress('', 'waiting', `Waiting ${boState.delaySeconds}s before next user...`);
+                    await delay(boState.delaySeconds * 1000, true, () => boState.status !== 'sending');
+                  }
+                  continue;
+                }
+              }
+
+              broadcastBOProgress(user.username, 'typing', 'Typing message...');
+              const typeResult = await sendToTab(boState.tabId, { action: 'typeAndSendDM', message: personalizedMsg });
+              if (typeResult && typeResult.error) throw new Error(typeResult.error);
+
+              if (typeResult && typeResult.warning) {
+                broadcastBOProgress(user.username, 'done-warning', `Followed & DM sent (unverified) — ${typeResult.warning}`);
+                boState.sentLog.push({ username: user.username, status: 'success', message: 'Followed & DM sent (unverified)', timestamp: Date.now() });
+              } else {
+                broadcastBOProgress(user.username, 'done', `Followed & DM sent to @${user.username}!`);
+                boState.sentLog.push({ username: user.username, status: 'success', message: 'Followed & DM sent', timestamp: Date.now() });
+                recordHealthResult(true);
+              }
             }
 
             await saveDMHistory({
@@ -1119,15 +1201,23 @@ async function processCadenceQueue() {
       const profileCheck = await sendToTab(tab.id, { action: 'checkProfileActions' });
 
       if (profileCheck && profileCheck.hasMessage) {
-        const clickResult = await sendToTab(tab.id, { action: 'clickMessageButton' });
-        if (clickResult && clickResult.error) throw new Error(clickResult.error);
+        if (itemDMPlat === 'linkedin') {
+          // LinkedIn: compose-page approach
+          const profileInfo = await sendToTab(tab.id, { action: 'getProfileInfo' });
+          const displayName = profileInfo?.fullName;
+          if (!displayName) throw new Error('Could not read display name from LinkedIn profile');
+          await linkedinComposeDM(tab.id, displayName, personalizedMsg);
+        } else {
+          const clickResult = await sendToTab(tab.id, { action: 'clickMessageButton' });
+          if (clickResult && clickResult.error) throw new Error(clickResult.error);
 
-        await delay(3000);
-        await injectContentScript(tab.id, itemDMPlat);
-        await delay(1000);
+          await delay(3000);
+          await injectContentScript(tab.id, itemDMPlat);
+          await delay(1000);
 
-        const typeResult = await sendToTab(tab.id, { action: 'typeAndSendDM', message: personalizedMsg });
-        if (typeResult && typeResult.error) throw new Error(typeResult.error);
+          const typeResult = await sendToTab(tab.id, { action: 'typeAndSendDM', message: personalizedMsg });
+          if (typeResult && typeResult.error) throw new Error(typeResult.error);
+        }
 
         item.status = 'sent';
 
@@ -1219,15 +1309,23 @@ async function runWaitlistRecheck(waitlist, platform) {
         } else {
           broadcastWaitlistProgress(user.username, 'checking', `Message button found — sending DM...`, i, waitlist.length, results);
 
-          const clickResult = await sendToTab(boState.tabId, { action: 'clickMessageButton' });
-          if (clickResult && clickResult.error) throw new Error(clickResult.error);
+          if (dmPlat === 'linkedin') {
+            // LinkedIn: compose-page approach
+            const profileInfo = await sendToTab(boState.tabId, { action: 'getProfileInfo' });
+            const displayName = profileInfo?.fullName;
+            if (!displayName) throw new Error('Could not read display name from LinkedIn profile');
+            await linkedinComposeDM(boState.tabId, displayName, personalizedMsg);
+          } else {
+            const clickResult = await sendToTab(boState.tabId, { action: 'clickMessageButton' });
+            if (clickResult && clickResult.error) throw new Error(clickResult.error);
 
-          await delay(3000);
-          await injectContentScript(boState.tabId, dmPlat);
-          await delay(1000);
+            await delay(3000);
+            await injectContentScript(boState.tabId, dmPlat);
+            await delay(1000);
 
-          const typeResult = await sendToTab(boState.tabId, { action: 'typeAndSendDM', message: personalizedMsg });
-          if (typeResult && typeResult.error) throw new Error(typeResult.error);
+            const typeResult = await sendToTab(boState.tabId, { action: 'typeAndSendDM', message: personalizedMsg });
+            if (typeResult && typeResult.error) throw new Error(typeResult.error);
+          }
 
           broadcastWaitlistProgress(user.username, 'dm-sent', `DM sent to @${user.username}!`, i, waitlist.length, results);
           results.push({ username: user.username, status: 'dm-sent' });

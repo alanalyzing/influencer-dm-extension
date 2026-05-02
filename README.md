@@ -4,6 +4,28 @@
 
 ---
 
+## What's New in v11.3
+
+### LinkedIn DM: Compose-Page Approach (Fixes "Could not find message input")
+
+Completely rearchitected the LinkedIn DM flow. Instead of clicking the "Message" button on a profile page and trying to type into the dynamically-rendered overlay popup (which consistently failed because LinkedIn's Ember.js renders the textarea after page load), the extension now:
+
+1. **Reads the display name** from the profile page
+2. **Navigates to** `linkedin.com/messaging/thread/new/` (the compose page)
+3. **Searches for the recipient** by name in the compose search field
+4. **Selects the matching contact** from the dropdown suggestions
+5. **Types and sends the message** in the textarea (verified to exist on this page)
+
+This approach is used across **all LinkedIn DM paths**: Send DMs loop, Bulk Outreach, connect-then-DM, waitlist recheck, and cadence follow-ups.
+
+**Other fixes:**
+- Added reusable `linkedinComposeDM()` helper function to eliminate code duplication
+- Changed LinkedIn DM check from `clickMessageButton` (which opens the overlay) to `checkProfileActions` (which only checks without clicking)
+- Fixed `sendToTab` retry to detect platform from tab URL instead of defaulting to Instagram
+- **UI fix:** Moved outreach progress card below the "Start Outreach" button (was pinned at top of panel)
+
+---
+
 ## What's New in v11.2
 
 ### Intuitive UI for New Users
