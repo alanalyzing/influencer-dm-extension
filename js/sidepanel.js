@@ -1,19 +1,20 @@
 /**
- * Side Panel Controller (v10)
+ * Side Panel Controller (v11.1)
  *
  * Two modes:
- *   1. Bulk Outreach (primary) — handle list, templates, status lights, history, cadence
- *   2. Keyword Scan — scan post comments for keywords, send DMs
+ *   1. Send DMs (primary) — handle list, templates, status lights, history, cadence
+ *   2. Comment Scanner — scan post comments for keywords, send DMs
  *
- * New in v7:
- *   - Dashboard sub-tab with stats grid, 7-day activity chart, outcome breakdown, session health
- *   - CSV Import: parse CSV/TXT files into handles textarea
- *   - CSV Export: download handles list or full history as CSV
- *   - Dashboard is the default active sub-tab in Bulk Outreach
- *
- * Previous versions:
- *   v6: Multi-platform (Instagram + Threads), session health monitoring, DM reliability
- *   v5: Three-light status, history, cadence follow-ups, full automation toggle
+ * New in v11.1:
+ *   - Welcome card with 3-step onboarding for first-time users
+ *   - Starter template suggestion when no templates exist
+ *   - Collapsible Advanced Settings (Behavior + Cadence)
+ *   - Inline flow steps in Outreach tab (Paste → Template → Start)
+ *   - Rich empty states with icons and descriptions
+ *   - Nudge card after first template creation
+ *   - Info tooltips on key controls
+ *   - Clearer labels: "Send DMs", "Comment Scanner", "Message Templates", "Review Handles"
+ *   - "No template" hint in Outreach with link to Templates tab
  */
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -156,6 +157,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   const settingXReplyFallback = $('settingXReplyFallback');
   const settingLinkedinConnectNote = $('settingLinkedinConnectNote');
 
+  // ─── DOM refs: Onboarding & UX ───
+  const welcomeCard       = $('welcomeCard');
+  const btnDismissWelcome = $('btnDismissWelcome');
+  const starterTemplate   = $('starterTemplate');
+  const btnUseStarter     = $('btnUseStarter');
+  const templateNudge     = $('templateNudge');
+  const linkGoToOutreach  = $('linkGoToOutreach');
+  const linkCreateTemplate = $('linkCreateTemplate');
+  const noTemplateHint    = $('noTemplateHint');
+  const toggleAdvancedSettings = $('toggleAdvancedSettings');
+  const advancedSettingsContent = $('advancedSettingsContent');
+  const dashboardEmptyState = $('dashboardEmptyState');
+  const dashboardContent  = $('dashboardContent');
+  const flowSteps         = document.querySelectorAll('.flow-step');
+
   // ─── State ───
   let currentStep = 1;
   let matchedUsers = [];
@@ -181,6 +197,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupPlatformSelector();
   setupCSVHandlers();
   renderDashboard();
+  setupOnboarding();
+  setupCollapsibleSections();
+  updateOutreachFlowSteps();
 
   // ─── Listen for real-time progress from background ───
   chrome.runtime.onMessage.addListener((msg) => {
@@ -662,8 +681,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function renderTemplates() {
+    // Show/hide starter template suggestion
+    if (starterTemplate) starterTemplate.style.display = templates.length === 0 ? 'block' : 'none';
+    // Show/hide nudge card
+    if (templateNudge) templateNudge.style.display = (templates.length > 0 && templates.length <= 2) ? 'flex' : 'none';
+    // Show/hide no-template hint in outreach tab
+    if (noTemplateHint) noTemplateHint.style.display = templates.length === 0 ? 'block' : 'none';
+    // Update welcome card step completion
+    updateWelcomeSteps();
+
     if (!templates.length) {
-      templatesList.innerHTML = '<div class="empty-state">No templates yet. Add one below.</div>';
+      templatesList.innerHTML = '<div class="empty-state-rich"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><p class="empty-state-title">No templates yet</p><p class="empty-state-desc">Create a message template below to start sending personalized DMs.</p></div>';
       return;
     }
     templatesList.innerHTML = templates.map((t, i) => `
@@ -823,6 +851,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     boHandleAssignments.style.display = 'block';
     btnStartOutreach.style.display = 'flex';
+    updateOutreachFlowSteps();
 
     // If full auto, start immediately
     if (boAutoSend && boAutoSend.checked) {
@@ -1076,7 +1105,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       renderHistoryList(items);
     } catch (e) {
-      if (historyList) historyList.innerHTML = '<div class="empty-state">No history yet.</div>';
+      if (historyList) historyList.innerHTML = '<div class="empty-state-rich"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg><p class="empty-state-title">No history yet</p><p class="empty-state-desc">Your outreach activity will appear here after you start sending DMs.</p></div>';
     }
   }
 
@@ -1090,7 +1119,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     if (!filtered.length) {
-      historyList.innerHTML = `<div class="empty-state">No ${currentHistoryFilter === 'all' ? '' : currentHistoryFilter + ' '}entries yet.</div>`;
+      historyList.innerHTML = `<div class="empty-state-rich"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg><p class="empty-state-title">No ${currentHistoryFilter === 'all' ? '' : currentHistoryFilter + ' '}history yet</p><p class="empty-state-desc">Your outreach activity will appear here after you start sending DMs.</p></div>`;
       return;
     }
 
@@ -1214,10 +1243,10 @@ document.addEventListener('DOMContentLoaded', async () => {
           </div>`;
         }).join('');
       } else {
-        waitlistList.innerHTML = '<div class="empty-state">No users on the waitlist.</div>';
+        waitlistList.innerHTML = '<div class="empty-state-rich"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg><p class="empty-state-title">No users waiting</p><p class="empty-state-desc">Private accounts awaiting follow-back will appear here.</p></div>';
       }
     } catch (e) {
-      waitlistList.innerHTML = '<div class="empty-state">No users on the waitlist.</div>';
+      waitlistList.innerHTML = '<div class="empty-state-rich"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg><p class="empty-state-title">No users waiting</p><p class="empty-state-desc">Private accounts awaiting follow-back will appear here.</p></div>';
     }
   }
 
@@ -1364,6 +1393,18 @@ document.addEventListener('DOMContentLoaded', async () => {
       const history = histData.history || [];
       const waitlist = waitData.waitlist || [];
       const health = healthData || {};
+
+      // Show empty state if no history
+      if (dashboardEmptyState && dashboardContent) {
+        if (history.length === 0) {
+          dashboardEmptyState.style.display = 'block';
+          dashboardContent.style.display = 'none';
+          return;
+        } else {
+          dashboardEmptyState.style.display = 'none';
+          dashboardContent.style.display = 'block';
+        }
+      }
 
       const now = Date.now();
       const oneDayMs = 24 * 60 * 60 * 1000;
@@ -1631,6 +1672,124 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.body.appendChild(a);
     a.click();
     setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+  }
+
+
+  // ═════════════════════════════════════════════════════════════════
+  //  ONBOARDING & UX ENHANCEMENTS
+  // ═════════════════════════════════════════════════════════════════
+
+  async function setupOnboarding() {
+    try {
+      const data = await chrome.storage.local.get('welcomeDismissed');
+      const { history } = await bg({ action: 'getHistory' });
+      const hasHistory = (history || []).length > 0;
+      const dismissed = data.welcomeDismissed === true;
+
+      // Show welcome card only for new users (no templates, no history, not dismissed)
+      if (welcomeCard && !dismissed && templates.length === 0 && !hasHistory) {
+        welcomeCard.style.display = 'block';
+      }
+
+      // Dismiss button
+      if (btnDismissWelcome) {
+        btnDismissWelcome.addEventListener('click', () => {
+          welcomeCard.style.display = 'none';
+          chrome.storage.local.set({ welcomeDismissed: true });
+        });
+      }
+
+      // Starter template button
+      if (btnUseStarter) {
+        btnUseStarter.addEventListener('click', async () => {
+          templates.push({
+            id: 'tpl_' + Date.now(),
+            name: 'Collaboration Invite',
+            body: "Hi {{username}}, I love your content! We'd love to explore a collaboration with you. Would you be open to a quick chat?",
+            color: TEMPLATE_COLORS[templates.length % TEMPLATE_COLORS.length]
+          });
+          await saveTemplates();
+          starterTemplate.style.display = 'none';
+          updateWelcomeSteps();
+        });
+      }
+
+      // Link: "Create one first" in outreach tab
+      if (linkCreateTemplate) {
+        linkCreateTemplate.addEventListener('click', (e) => {
+          e.preventDefault();
+          switchToSubTab('bo-templates');
+        });
+      }
+
+      // Link: "Go to Outreach" nudge after creating template
+      if (linkGoToOutreach) {
+        linkGoToOutreach.addEventListener('click', (e) => {
+          e.preventDefault();
+          switchToSubTab('bo-outreach');
+        });
+      }
+
+      updateWelcomeSteps();
+    } catch (e) {
+      console.warn('Onboarding setup error:', e);
+    }
+  }
+
+  function updateWelcomeSteps() {
+    if (!welcomeCard || welcomeCard.style.display === 'none') return;
+    const step1 = $('welcomeStep1');
+    const step2 = $('welcomeStep2');
+    const step3 = $('welcomeStep3');
+    if (step1) step1.classList.toggle('completed', templates.length > 0);
+    if (step2) step2.classList.toggle('completed', parsedHandles.length > 0);
+  }
+
+  function switchToSubTab(tabId) {
+    subTabs.forEach(t => t.classList.toggle('active', t.dataset.subtab === tabId));
+    Object.entries(subPanels).forEach(([k, v]) => { if (v) v.classList.toggle('active', k === tabId); });
+    if (tabId === 'bo-dashboard') renderDashboard();
+    if (tabId === 'bo-waitlist') refreshWaitlist();
+    if (tabId === 'bo-history') { refreshHistory(); refreshCadenceQueue(); }
+  }
+
+  function setupCollapsibleSections() {
+    if (toggleAdvancedSettings && advancedSettingsContent) {
+      toggleAdvancedSettings.addEventListener('click', () => {
+        const isOpen = advancedSettingsContent.style.display !== 'none';
+        advancedSettingsContent.style.display = isOpen ? 'none' : 'block';
+        toggleAdvancedSettings.classList.toggle('open', !isOpen);
+      });
+    }
+  }
+
+  function updateOutreachFlowSteps() {
+    if (!flowSteps || flowSteps.length === 0) return;
+    const hasHandles = boHandlesInput && boHandlesInput.value.trim().length > 0;
+    const hasTemplate = templates.length > 0;
+    const hasParsed = parsedHandles.length > 0;
+
+    flowSteps.forEach(step => {
+      const n = parseInt(step.dataset.flow);
+      step.classList.remove('active', 'completed');
+      if (n === 1) {
+        if (hasHandles || hasParsed) step.classList.add('completed');
+        else step.classList.add('active');
+      } else if (n === 2) {
+        if (hasParsed) step.classList.add('completed');
+        else if (hasHandles && hasTemplate) step.classList.add('active');
+      } else if (n === 3) {
+        if (hasParsed) step.classList.add('active');
+      }
+    });
+  }
+
+  // Update flow steps when handles textarea changes
+  if (boHandlesInput) {
+    boHandlesInput.addEventListener('input', () => {
+      updateOutreachFlowSteps();
+      updateWelcomeSteps();
+    });
   }
 
 

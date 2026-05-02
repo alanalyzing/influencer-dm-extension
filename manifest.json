@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Influencer DM Manager",
-  "version": "11.1.0",
+  "version": "11.2.0",
   "description": "Multi-platform influencer engagement manager for Instagram, Threads, LinkedIn, and X (Twitter). Bulk outreach, keyword scan, DM templates, connection/follow + DM logic, tweet reply fallback, waitlist, dashboard analytics, CSV import/export.",
   "permissions": [
     "activeTab",

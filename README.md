@@ -4,6 +4,37 @@
 
 ---
 
+## What's New in v11.2
+
+### Intuitive UI for New Users
+
+Comprehensive UX redesign focused on making the extension approachable for first-time users while keeping all advanced features accessible for power users.
+
+**Onboarding:**
+- **Welcome card** with 3-step visual guide (Create template → Add handles → Start sending) — shown only for new users, dismissible
+- **Starter template suggestion** when no templates exist — one-click "Use This Template" to get started instantly
+- **Nudge card** after first template creation — guides user to the Outreach tab
+
+**Clearer Labels:**
+- "Bulk Outreach" → **"Send DMs"** (mode tab)
+- "Keyword Scan" → **"Comment Scanner"** (mode tab)
+- "Reply Directions" → **"Message Templates"** (card header)
+- "Parse & Assign" → **"Review Handles"** (button)
+
+**Progressive Disclosure:**
+- **Collapsible Advanced Settings** — Behavior Settings and Cadence are now hidden by default behind an "Advanced Settings" toggle
+- **Info tooltips** on Delay and Full Automation controls explaining what they do
+- **"No template" hint** in Outreach tab with direct link to Templates tab
+
+**Visual Improvements:**
+- **Inline flow steps** in Outreach tab (1. Paste handles → 2. Choose template → 3. Start) with active/completed states
+- **Rich empty states** with icons and descriptions for Templates, History, Waitlist, and Dashboard
+- **Dashboard empty state** shows guidance instead of zero-filled charts
+- Card subtitles for section context
+- Smooth animations on welcome card and nudge
+
+---
+
 ## What's New in v11.1
 
 ### LinkedIn "Could not find message input" Fix

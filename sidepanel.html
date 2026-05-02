@@ -14,7 +14,7 @@
       <img src="icons/icon48.png" alt="" class="header-icon" />
       <div class="header-text">
         <h1>Influencer DM Manager</h1>
-        <span class="header-version">v11</span>
+        <span class="header-version">v11.2</span>
       </div>
     </div>
   </header>
@@ -39,21 +39,56 @@
     </button>
   </div>
 
-  <!-- ═══ Mode Tabs (Bulk Outreach FIRST) ═══ -->
+  <!-- ═══ Mode Tabs ═══ -->
   <nav class="mode-tabs">
     <button class="mode-tab active" data-mode="outreach">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
-      Bulk Outreach
+      Send DMs
     </button>
     <button class="mode-tab" data-mode="keyword">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-      Keyword Scan
+      Comment Scanner
     </button>
   </nav>
 
 
   <!-- ╔══════════════════════════════════════════╗ -->
-  <!-- ║  MODE 1: BULK OUTREACH (now first)        ║ -->
+  <!-- ║  WELCOME CARD (first-time users)          ║ -->
+  <!-- ╚══════════════════════════════════════════╝ -->
+  <div id="welcomeCard" class="welcome-card" style="display:none">
+    <button id="btnDismissWelcome" class="welcome-dismiss" title="Dismiss">&times;</button>
+    <div class="welcome-header">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="1.5"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+      <h2>Welcome! Here's how to get started</h2>
+    </div>
+    <div class="welcome-steps">
+      <div class="welcome-step" id="welcomeStep1">
+        <div class="welcome-step-num">1</div>
+        <div class="welcome-step-content">
+          <strong>Create a message template</strong>
+          <span>Write the DM you want to send. Use {{username}} to personalize it.</span>
+        </div>
+      </div>
+      <div class="welcome-step" id="welcomeStep2">
+        <div class="welcome-step-num">2</div>
+        <div class="welcome-step-content">
+          <strong>Add your target handles</strong>
+          <span>Paste usernames in the Outreach tab, or import from CSV.</span>
+        </div>
+      </div>
+      <div class="welcome-step" id="welcomeStep3">
+        <div class="welcome-step-num">3</div>
+        <div class="welcome-step-content">
+          <strong>Start sending</strong>
+          <span>Click "Start Outreach" and the extension handles the rest.</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ╔══════════════════════════════════════════╗ -->
+  <!-- ║  MODE 1: SEND DMs                         ║ -->
   <!-- ╚══════════════════════════════════════════╝ -->
   <div id="modeOutreach" class="mode-panel active">
 
@@ -77,7 +112,7 @@
       </div>
     </div>
 
-    <!-- Sub-tabs: Templates | Outreach | History | Waitlist | Dashboard -->
+    <!-- Sub-tabs -->
     <nav class="sub-tabs">
       <button class="sub-tab active" data-subtab="bo-templates">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
@@ -103,59 +138,80 @@
       </button>
     </nav>
 
-    <!-- ─── Sub-tab 0: Dashboard ─── -->
+    <!-- ─── Sub-tab: Dashboard ─── -->
     <section id="bo-dashboard" class="sub-panel">
       <div class="card">
         <div class="card-header"><h2>Dashboard</h2></div>
         <div class="card-body">
-          <!-- Stats Cards -->
-          <div class="stats-grid">
-            <div class="stat-card">
-              <div class="stat-value" id="statDMsToday">0</div>
-              <div class="stat-label">DMs Today</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-value" id="statDMsWeek">0</div>
-              <div class="stat-label">This Week</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-value" id="statSuccessRate">0%</div>
-              <div class="stat-label">Success Rate</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-value" id="statWaitlist">0</div>
-              <div class="stat-label">Waitlisted</div>
-            </div>
+          <div id="dashboardEmptyState" class="empty-state-rich" style="display:none">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+            <p class="empty-state-title">No stats yet</p>
+            <p class="empty-state-desc">Your outreach analytics will appear here after you send your first DM.</p>
           </div>
-
-          <!-- Activity Chart -->
-          <div class="chart-section">
-            <h3 class="chart-title">7-Day Activity</h3>
-            <div id="activityChart" class="bar-chart"></div>
-          </div>
-
-          <!-- Status Breakdown -->
-          <div class="chart-section">
-            <h3 class="chart-title">Outcome Breakdown</h3>
-            <div id="outcomeChart" class="horizontal-bars"></div>
-          </div>
-
-          <!-- Session Health -->
-          <div class="chart-section">
-            <h3 class="chart-title">Current Session Health</h3>
-            <div id="sessionHealthDisplay" class="health-display">
-              <span class="health-status good">No active session</span>
+          <div id="dashboardContent">
+            <div class="stats-grid">
+              <div class="stat-card">
+                <div class="stat-value" id="statDMsToday">0</div>
+                <div class="stat-label">DMs Today</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-value" id="statDMsWeek">0</div>
+                <div class="stat-label">This Week</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-value" id="statSuccessRate">0%</div>
+                <div class="stat-label">Success Rate</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-value" id="statWaitlist">0</div>
+                <div class="stat-label">Waitlisted</div>
+              </div>
+            </div>
+            <div class="chart-section">
+              <h3 class="chart-title">7-Day Activity</h3>
+              <div id="activityChart" class="bar-chart"></div>
+            </div>
+            <div class="chart-section">
+              <h3 class="chart-title">Outcome Breakdown</h3>
+              <div id="outcomeChart" class="horizontal-bars"></div>
+            </div>
+            <div class="chart-section">
+              <h3 class="chart-title">Current Session Health</h3>
+              <div id="sessionHealthDisplay" class="health-display">
+                <span class="health-status good">No active session</span>
+              </div>
             </div>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- ─── Sub-tab 1: Outreach ─── -->
+    <!-- ─── Sub-tab: Outreach ─── -->
     <section id="bo-outreach" class="sub-panel">
       <div class="card">
-        <div class="card-header"><h2>Bulk Outreach</h2></div>
+        <div class="card-header">
+          <h2>Outreach</h2>
+          <span class="card-subtitle">Paste handles and send DMs</span>
+        </div>
         <div class="card-body">
+          <!-- Inline step indicator for outreach flow -->
+          <div class="outreach-flow-steps">
+            <div class="flow-step active" data-flow="1">
+              <div class="flow-step-dot">1</div>
+              <span>Paste handles</span>
+            </div>
+            <div class="flow-step-line"></div>
+            <div class="flow-step" data-flow="2">
+              <div class="flow-step-dot">2</div>
+              <span>Choose template</span>
+            </div>
+            <div class="flow-step-line"></div>
+            <div class="flow-step" data-flow="3">
+              <div class="flow-step-dot">3</div>
+              <span>Start</span>
+            </div>
+          </div>
+
           <div class="field">
             <label for="boHandles" id="boHandlesLabel">Instagram Handles</label>
             <textarea id="boHandles" rows="4" placeholder="username1&#10;username2&#10;username3"></textarea>
@@ -181,9 +237,16 @@
               <select id="boDefaultTemplate">
                 <option value="">-- Select --</option>
               </select>
+              <span id="noTemplateHint" class="hint hint-action" style="display:none">
+                No templates yet.
+                <a href="#" id="linkCreateTemplate" class="hint-link">Create one first</a>
+              </span>
             </div>
             <div class="field field-half">
-              <label for="boDelay">Delay (sec)</label>
+              <label for="boDelay">
+                Delay (sec)
+                <span class="info-tooltip" data-tip="Time between each DM. Lower values risk rate limiting.">?</span>
+              </label>
               <input id="boDelay" type="number" min="10" max="300" value="60" />
               <span id="boDelayWarning" class="delay-warning" style="display:none">Below 60s risks rate limiting or account ban.</span>
               <span id="boLinkedinDelayHint" class="hint platform-hint linkedin-only" style="display:none">LinkedIn recommended: 90-120s. Max ~100 connections/day.</span>
@@ -197,88 +260,98 @@
               <input id="boAutoSend" type="checkbox" class="toggle-input" />
               <span class="toggle-switch"></span>
               <span class="toggle-text">Full Automation</span>
+              <span class="info-tooltip" data-tip="When enabled, DMs are sent immediately after parsing handles — no review step.">?</span>
             </label>
             <span class="hint" style="margin-left:46px">Skip review — follow &amp; DM all handles automatically.</span>
           </div>
 
-          <!-- Behavior Settings -->
-          <div class="settings-section">
-            <label class="settings-title">
+          <!-- Advanced Settings (collapsed by default) -->
+          <div class="collapsible-section">
+            <button class="collapsible-toggle" id="toggleAdvancedSettings">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-              Behavior Settings
-            </label>
-            <div class="settings-options">
-              <label class="settings-option">
-                <input type="checkbox" id="settingAlwaysFollow" checked />
-                <span>Always follow before sending DM</span>
-              </label>
-              <span class="hint" style="margin-left:22px">Follow even when Message button is already visible.</span>
+              Advanced Settings
+              <svg class="collapsible-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div class="collapsible-content" id="advancedSettingsContent" style="display:none">
+              <!-- Behavior Settings -->
+              <div class="settings-section">
+                <label class="settings-title">
+                  Behavior
+                </label>
+                <div class="settings-options">
+                  <label class="settings-option">
+                    <input type="checkbox" id="settingAlwaysFollow" checked />
+                    <span>Always follow before sending DM</span>
+                  </label>
+                  <span class="hint" style="margin-left:22px">Follow even when Message button is already visible.</span>
 
-              <label class="settings-option" style="margin-top:6px">
-                <input type="checkbox" id="settingDMAfterFollow" checked />
-                <span>DM immediately after follow (public accounts)</span>
-              </label>
-              <span class="hint" style="margin-left:22px">For public accounts, send DM right after following. Uncheck to add to waitlist instead.</span>
+                  <label class="settings-option" style="margin-top:6px">
+                    <input type="checkbox" id="settingDMAfterFollow" checked />
+                    <span>DM immediately after follow (public accounts)</span>
+                  </label>
+                  <span class="hint" style="margin-left:22px">For public accounts, send DM right after following. Uncheck to add to waitlist instead.</span>
 
-              <label class="settings-option" style="margin-top:6px">
-                <input type="checkbox" id="settingWaitlistPrivate" checked />
-                <span>Waitlist private accounts (Requested)</span>
-              </label>
-              <span class="hint" style="margin-left:22px">Private accounts go to waitlist. Uncheck to skip them entirely.</span>
+                  <label class="settings-option" style="margin-top:6px">
+                    <input type="checkbox" id="settingWaitlistPrivate" checked />
+                    <span>Waitlist private accounts (Requested)</span>
+                  </label>
+                  <span class="hint" style="margin-left:22px">Private accounts go to waitlist. Uncheck to skip them entirely.</span>
 
-              <label class="settings-option" style="margin-top:6px">
-                <input type="checkbox" id="settingSkipPrivate" />
-                <span>Skip private profiles entirely</span>
-              </label>
-              <span class="hint" style="margin-left:22px">Detect private accounts before following and skip them — no follow request sent.</span>
+                  <label class="settings-option" style="margin-top:6px">
+                    <input type="checkbox" id="settingSkipPrivate" />
+                    <span>Skip private profiles entirely</span>
+                  </label>
+                  <span class="hint" style="margin-left:22px">Detect private accounts before following and skip them — no follow request sent.</span>
 
-              <label class="settings-option" style="margin-top:6px">
-                <input type="checkbox" id="settingXReplyFallback" checked />
-                <span>X: Reply to tweet when DMs closed</span>
-              </label>
-              <span class="hint" style="margin-left:22px">If user's DMs are closed, reply to their latest tweet instead.</span>
+                  <label class="settings-option" style="margin-top:6px">
+                    <input type="checkbox" id="settingXReplyFallback" checked />
+                    <span>X: Reply to tweet when DMs closed</span>
+                  </label>
+                  <span class="hint" style="margin-left:22px">If user's DMs are closed, reply to their latest tweet instead.</span>
 
-              <label class="settings-option" style="margin-top:6px">
-                <input type="checkbox" id="settingLinkedinConnectNote" checked />
-                <span>LinkedIn: Send connection note as message</span>
-              </label>
-              <span class="hint" style="margin-left:22px">Use your DM template as the connection note (max 300 chars).</span>
-              <span id="linkedinNoteLength" class="hint" style="margin-left:22px;display:none;color:var(--warning)">Note: 0/300 characters</span>
-            </div>
-          </div>
+                  <label class="settings-option" style="margin-top:6px">
+                    <input type="checkbox" id="settingLinkedinConnectNote" checked />
+                    <span>LinkedIn: Send connection note as message</span>
+                  </label>
+                  <span class="hint" style="margin-left:22px">Use your DM template as the connection note (max 300 chars).</span>
+                  <span id="linkedinNoteLength" class="hint" style="margin-left:22px;display:none;color:var(--warning)">Note: 0/300 characters</span>
+                </div>
+              </div>
 
-          <!-- Follow-up Cadence -->
-          <div class="cadence-section">
-            <label class="cadence-title">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-              Auto Follow-up Cadence
-            </label>
-            <div class="cadence-options">
-              <label class="cadence-option">
-                <input type="checkbox" id="cadence6h" class="cadence-check" value="6" />
-                <span class="cadence-label">6h</span>
-              </label>
-              <label class="cadence-option">
-                <input type="checkbox" id="cadence12h" class="cadence-check" value="12" />
-                <span class="cadence-label">12h</span>
-              </label>
-              <label class="cadence-option">
-                <input type="checkbox" id="cadence24h" class="cadence-check" value="24" />
-                <span class="cadence-label">24h</span>
-              </label>
-            </div>
-            <span class="hint">Select intervals to auto-send follow-up messages after initial DM.</span>
-            <div class="field" id="cadenceTemplateField" style="display:none; margin-top:8px">
-              <label for="cadenceTemplate">Follow-up Template</label>
-              <select id="cadenceTemplate">
-                <option value="">-- Select --</option>
-              </select>
+              <!-- Follow-up Cadence -->
+              <div class="cadence-section">
+                <label class="cadence-title">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                  Auto Follow-up Cadence
+                </label>
+                <div class="cadence-options">
+                  <label class="cadence-option">
+                    <input type="checkbox" id="cadence6h" class="cadence-check" value="6" />
+                    <span class="cadence-label">6h</span>
+                  </label>
+                  <label class="cadence-option">
+                    <input type="checkbox" id="cadence12h" class="cadence-check" value="12" />
+                    <span class="cadence-label">12h</span>
+                  </label>
+                  <label class="cadence-option">
+                    <input type="checkbox" id="cadence24h" class="cadence-check" value="24" />
+                    <span class="cadence-label">24h</span>
+                  </label>
+                </div>
+                <span class="hint">Select intervals to auto-send follow-up messages after initial DM.</span>
+                <div class="field" id="cadenceTemplateField" style="display:none; margin-top:8px">
+                  <label for="cadenceTemplate">Follow-up Template</label>
+                  <select id="cadenceTemplate">
+                    <option value="">-- Select --</option>
+                  </select>
+                </div>
+              </div>
             </div>
           </div>
 
           <button id="btnParseHandles" class="btn btn-secondary btn-full" style="margin-top:8px">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-            Parse &amp; Assign
+            Review Handles
           </button>
 
           <!-- Per-handle template assignment -->
@@ -297,7 +370,7 @@
       </div>
     </section>
 
-    <!-- ─── Sub-tab 2: History ─── -->
+    <!-- ─── Sub-tab: History ─── -->
     <section id="bo-history" class="sub-panel">
       <div class="card">
         <div class="card-header">
@@ -307,7 +380,6 @@
         <div class="card-body">
           <p class="hint" style="margin-bottom:10px">All outreach activity. Status lights show progress per account.</p>
 
-          <!-- Filter bar -->
           <div class="history-filters">
             <button class="filter-btn active" data-filter="all">All</button>
             <button class="filter-btn" data-filter="messaged">Messaged</button>
@@ -317,7 +389,6 @@
 
           <div id="historyList" class="history-list"></div>
 
-          <!-- Cadence Queue -->
           <div id="cadenceQueue" style="display:none; margin-top:14px">
             <div class="cadence-queue-header">
               <h3>Scheduled Follow-ups</h3>
@@ -337,7 +408,7 @@
       </div>
     </section>
 
-    <!-- ─── Sub-tab 3: Waitlist ─── -->
+    <!-- ─── Sub-tab: Waitlist ─── -->
     <section id="bo-waitlist" class="sub-panel">
       <div class="card">
         <div class="card-header">
@@ -363,13 +434,27 @@
       </div>
     </section>
 
-    <!-- ─── Sub-tab 4: Templates ─── -->
+    <!-- ─── Sub-tab: Templates ─── -->
     <section id="bo-templates" class="sub-panel active">
       <div class="card">
-        <div class="card-header"><h2>Reply Directions</h2></div>
+        <div class="card-header"><h2>Message Templates</h2></div>
         <div class="card-body">
-          <p class="hint" style="margin-bottom:10px">Pre-configure DM templates. Use {{username}} for personalization.</p>
+          <p class="hint" style="margin-bottom:10px">Create DM templates. Use <code>{{username}}</code> to personalize each message.</p>
           <div id="templatesList" class="templates-list"></div>
+
+          <!-- Starter template suggestion (shown when no templates exist) -->
+          <div id="starterTemplate" class="starter-template" style="display:none">
+            <div class="starter-template-header">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+              <span>Try this starter template:</span>
+            </div>
+            <div class="starter-template-body">
+              <div class="starter-template-name">Collaboration Invite</div>
+              <div class="starter-template-text">Hi {{username}}, I love your content! We'd love to explore a collaboration with you. Would you be open to a quick chat?</div>
+            </div>
+            <button id="btnUseStarter" class="btn btn-sm btn-primary">Use This Template</button>
+          </div>
+
           <div class="template-add-form">
             <div class="field">
               <label for="newTemplateName">Template Name</label>
@@ -383,13 +468,19 @@
           </div>
         </div>
       </div>
+
+      <!-- Nudge to Outreach tab (shown after first template is created) -->
+      <div id="templateNudge" class="nudge-card" style="display:none">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        <span>Template created! Now go to <a href="#" id="linkGoToOutreach" class="hint-link">Outreach</a> to add handles and start sending.</span>
+      </div>
     </section>
 
   </div><!-- /modeOutreach -->
 
 
   <!-- ╔══════════════════════════════════════════╗ -->
-  <!-- ║  MODE 2: KEYWORD SCAN                    ║ -->
+  <!-- ║  MODE 2: COMMENT SCANNER                  ║ -->
   <!-- ╚══════════════════════════════════════════╝ -->
   <div id="modeKeyword" class="mode-panel">
 
@@ -406,7 +497,10 @@
 
     <section id="step1" class="step-panel active">
       <div class="card">
-        <div class="card-header"><h2>Campaign Setup</h2></div>
+        <div class="card-header">
+          <h2>Campaign Setup</h2>
+          <span class="card-subtitle">Scan post comments for keywords, then DM matches</span>
+        </div>
         <div class="card-body">
           <div class="field">
             <label for="postUrl" id="postUrlLabel">Instagram Post URL</label>
