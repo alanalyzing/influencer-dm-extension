@@ -108,7 +108,7 @@
       typeAndSendDM: () => handleTypeAndSendDM(msg.message),
       checkIfPrivate: () => handleCheckIfPrivate(),
       getProfileInfo: () => handleGetProfileInfo(),
-      searchAndSelectRecipient: () => handleSearchAndSelectRecipient(msg.displayName),
+      searchAndSelectRecipient: () => handleSearchAndSelectRecipient(msg.displayName, msg.headline),
       ping: () => Promise.resolve({ pong: true })
     };
 
@@ -973,17 +973,15 @@
   //  wait for suggestions, click the first matching result.
   // ════════════════════════════════════════════════════════════
 
-  async function handleSearchAndSelectRecipient(displayName) {
+  async function handleSearchAndSelectRecipient(displayName, profileHeadline) {
     if (!displayName) return { error: 'No display name provided' };
 
     // Wait for the compose page to fully render
     await sleep(2000);
 
-    // Find the recipient search input
+    // ── Step 1: Find the recipient search input ──
     // Verified selectors from LinkedIn compose page (May 2026):
-    //   - input[role="combobox"][placeholder*="name"]
-    //   - input[id*="search-field"]
-    //   - input[placeholder*="Type a name"]
+    //   input[id*="search-field"][role="combobox"][placeholder="Type a name or multiple names"]
     const SEARCH_SELECTORS = [
       'input[role="combobox"][placeholder*="name"]',
       'input[role="combobox"][placeholder*="Name"]',
@@ -1013,7 +1011,7 @@
       return { error: 'Could not find recipient search input on compose page' };
     }
 
-    // Focus and type the display name
+    // ── Step 2: Type the display name ──
     searchInput.focus();
     await sleep(300);
 
@@ -1040,49 +1038,109 @@
       searchInput.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
-    // Wait for the suggestions dropdown to appear
+    // ── Step 3: Wait for suggestions and pick the RIGHT person ──
+    // LinkedIn suggestion DOM structure (verified May 2026):
+    //   li.msg-connections-typeahead__search-result[role="option"]
+    //     └── div.msg-connections-typeahead__entity-description
+    //           └── dl
+    //                 ├── dt.t-bold  → NAME  (e.g., "Amanda Cua")
+    //                 └── dd         → HEADLINE (e.g., "Founder & CEO at BackScoop...")
+    //
+    // Matching priority:
+    //   1. Exact headline match (handles same-name disambiguation)
+    //   2. Partial headline overlap (keywords in common)
+    //   3. First result with matching name (fallback)
+    //   4. First result overall (last resort)
+
     let selectedRecipient = false;
+    const normalizedTargetName = displayName.toLowerCase().trim();
+    const normalizedTargetHeadline = (profileHeadline || '').toLowerCase().trim();
+
     for (let attempt = 0; attempt < 30; attempt++) {
       await sleep(500);
 
-      // Look for suggestion items
-      // Verified selectors: li[role="option"], ul[role="listbox"] li
+      // Collect all suggestion items
       const suggestions = document.querySelectorAll(
-        'li[role="option"], ul[role="listbox"] li, [class*="typeahead"] li'
+        'li[role="option"], ul[role="listbox"] li, li.msg-connections-typeahead__search-result'
       );
 
-      if (suggestions.length > 0) {
-        // Click the first suggestion (most relevant match)
-        suggestions[0].click();
+      if (suggestions.length === 0) {
+        // If no suggestions after 10 attempts, try first name only to broaden search
+        if (attempt === 10) {
+          const firstName = displayName.split(' ')[0];
+          if (firstName !== displayName) {
+            nativeSetter.call(searchInput, '');
+            searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+            await sleep(300);
+            nativeSetter.call(searchInput, firstName);
+            searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+            searchInput.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        }
+        continue;
+      }
+
+      // Parse each suggestion to extract name and headline
+      const parsed = [];
+      for (const li of suggestions) {
+        const dtEl = li.querySelector('dt');
+        const ddEl = li.querySelector('dd');
+        const name = dtEl ? dtEl.textContent.trim().toLowerCase() : '';
+        const headline = ddEl ? ddEl.textContent.trim().toLowerCase() : '';
+        parsed.push({ el: li, name, headline });
+      }
+
+      // If only 1 suggestion, just click it (no ambiguity)
+      if (parsed.length === 1) {
+        parsed[0].el.click();
         selectedRecipient = true;
         await sleep(1000);
         break;
       }
 
-      // Also check for clickable result items with different structure
-      const resultItems = document.querySelectorAll(
-        '[class*="search-result"] button, [class*="typeahead-result"], [class*="msg-connections"] li'
-      );
-      if (resultItems.length > 0) {
-        resultItems[0].click();
-        selectedRecipient = true;
-        await sleep(1000);
-        break;
+      // Multiple suggestions — disambiguate
+      let bestMatch = null;
+
+      // Priority 1: Exact headline match
+      if (normalizedTargetHeadline) {
+        bestMatch = parsed.find(p => p.headline === normalizedTargetHeadline);
       }
 
-      // If no suggestions after 10 attempts, try re-typing with a slight variation
-      if (attempt === 10) {
-        // Try just the first name to broaden search
-        const firstName = displayName.split(' ')[0];
-        if (firstName !== displayName) {
-          nativeSetter.call(searchInput, '');
-          searchInput.dispatchEvent(new Event('input', { bubbles: true }));
-          await sleep(300);
-          nativeSetter.call(searchInput, firstName);
-          searchInput.dispatchEvent(new Event('input', { bubbles: true }));
-          searchInput.dispatchEvent(new Event('change', { bubbles: true }));
+      // Priority 2: Partial headline overlap (at least 3 words in common)
+      if (!bestMatch && normalizedTargetHeadline) {
+        const targetWords = normalizedTargetHeadline.split(/\s+/).filter(w => w.length > 3);
+        let maxOverlap = 0;
+        for (const p of parsed) {
+          if (!p.headline) continue;
+          const headlineWords = p.headline.split(/\s+/);
+          const overlap = targetWords.filter(w => headlineWords.includes(w)).length;
+          if (overlap > maxOverlap && overlap >= 3) {
+            maxOverlap = overlap;
+            bestMatch = p;
+          }
         }
       }
+
+      // Priority 3: First result with matching name
+      if (!bestMatch) {
+        bestMatch = parsed.find(p => p.name === normalizedTargetName);
+      }
+
+      // Priority 4: First result with name that starts with the same first name
+      if (!bestMatch) {
+        const firstName = normalizedTargetName.split(' ')[0];
+        bestMatch = parsed.find(p => p.name.startsWith(firstName));
+      }
+
+      // Priority 5: First result overall (last resort)
+      if (!bestMatch) {
+        bestMatch = parsed[0];
+      }
+
+      bestMatch.el.click();
+      selectedRecipient = true;
+      await sleep(1000);
+      break;
     }
 
     if (!selectedRecipient) {

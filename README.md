@@ -4,6 +4,29 @@
 
 ---
 
+## What's New in v11.4
+
+### LinkedIn DM: Same-Name Disambiguation + Robust Name Extraction
+
+**Problem:** When searching for a recipient on the compose page, if multiple people share the same name (e.g., "John Smith"), the extension would blindly click the first suggestion — potentially messaging the wrong person.
+
+**Fix:** The extension now extracts the **headline** from the target's profile page (e.g., "Founder & CEO at BackScoop") and uses it to match against the suggestion dropdown. Each suggestion item contains a `<dt>` (name) and `<dd>` (headline) element, enabling precise disambiguation.
+
+**Matching priority:**
+1. Exact headline match (strongest signal)
+2. Partial headline overlap (3+ shared keywords)
+3. First result with matching full name
+4. First result with matching first name
+5. First result overall (last resort)
+
+**Also improved: Name extraction reliability**
+- `handleGetProfileInfo` now retries 15 times (7.5s) with 5 CSS selectors for the name element
+- Falls back to page title ("Amanda Cua | LinkedIn") then URL slug ("amanda-cua" → "Amanda Cua")
+- `getLinkedInDisplayName` helper retries 3 times with content script re-injection between attempts
+- All 5 LinkedIn DM paths updated to pass headline for disambiguation
+
+---
+
 ## What's New in v11.3
 
 ### LinkedIn DM: Compose-Page Approach (Fixes "Could not find message input")
