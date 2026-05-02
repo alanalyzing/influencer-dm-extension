@@ -1,7 +1,9 @@
 /**
- * X (Twitter) Content Script (v2) — Atomic Single-Page Actions for x.com
+ * X (Twitter) Content Script (v3) — Atomic Single-Page Actions for x.com
  *
  * Updated with verified DOM selectors from real logged-in X (May 2026).
+ * v3 fixes: Bug #3 (execCommand for contenteditable), Bug #7 (reply from tweet page),
+ *           Edge cases E4/E5, Improvements S4/S8.
  *
  * KEY DOM FINDINGS:
  *   - X uses data-testid attributes extensively — very reliable selectors
@@ -27,15 +29,17 @@
  *   7. typeAndSendReply    — on a tweet: compose and send a reply (fallback when DMs closed)
  *   8. checkIfPrivate      — check if profile is protected/locked
  *   9. checkDMAvailability — check if user accepts DMs
- *  10. ping                — health check
+ *  10. findLatestTweetUrl  — find the URL of the user's latest tweet (for reply fallback)
+ *  11. likeLatestTweet     — like the first visible tweet (S8 improvement)
+ *  12. ping                — health check
  */
 
 (() => {
   'use strict';
 
   // Prevent duplicate injection
-  if (window.__IEM_X_V2__) return;
-  window.__IEM_X_V2__ = true;
+  if (window.__IEM_X_V3__) return;
+  window.__IEM_X_V3__ = true;
 
   if (window.__IEM_X_LISTENER__) {
     chrome.runtime.onMessage.removeListener(window.__IEM_X_LISTENER__);
@@ -53,9 +57,11 @@
       checkForMessageButton: () => handleCheckForMessageButton(),
       clickMessageButton: () => handleClickMessageButton(),
       typeAndSendDM: () => handleTypeAndSendDM(msg.message),
-      typeAndSendReply: () => handleTypeAndSendReply(msg.message, msg.tweetUrl),
+      typeAndSendReply: () => handleTypeAndSendReply(msg.message),
       checkIfPrivate: () => handleCheckIfPrivate(),
       checkDMAvailability: () => handleCheckDMAvailability(),
+      findLatestTweetUrl: () => handleFindLatestTweetUrl(),
+      likeLatestTweet: () => handleLikeLatestTweet(),
       ping: () => Promise.resolve({ pong: true })
     };
 
@@ -155,6 +161,16 @@
       const tweetTextEl = article.querySelector('div[data-testid="tweetText"]');
       const replyText = tweetTextEl ? tweetTextEl.textContent.trim() : '';
 
+      // IMPROVEMENT S4: Also extract the tweet URL for this reply (for reply fallback)
+      let tweetUrl = '';
+      const timeLink = article.querySelector('a[href*="/status/"] time');
+      if (timeLink) {
+        const parentLink = timeLink.closest('a');
+        if (parentLink) {
+          tweetUrl = 'https://x.com' + parentLink.getAttribute('href');
+        }
+      }
+
       // Check keyword match
       const textLower = replyText.toLowerCase();
       const matched = keywordList.some(kw => textLower.includes(kw));
@@ -164,7 +180,8 @@
           username,
           displayName: displayName || username,
           commentText: replyText.substring(0, 200),
-          profileUrl: `https://x.com/${username}`
+          profileUrl: `https://x.com/${username}`,
+          tweetUrl // Store for reply fallback (S4)
         });
       }
     }
@@ -193,15 +210,14 @@
     }
 
     // Check Follow button — button[data-testid$="-follow"] or button[aria-label^="Follow @"]
-    const followBtn = document.querySelector('button[data-testid$="-follow"]') ||
-                      document.querySelector('button[aria-label^="Follow @"]');
+    const followBtn = document.querySelector('button[data-testid$="-follow"]:not([data-testid$="-unfollow"])');
+    const followBtnAria = document.querySelector('button[aria-label^="Follow @"]');
+    const actualFollowBtn = followBtn || followBtnAria;
 
-    if (followBtn) {
-      const text = followBtn.textContent.trim().toLowerCase();
-      const ariaLabel = (followBtn.getAttribute('aria-label') || '').toLowerCase();
-      const testId = (followBtn.getAttribute('data-testid') || '').toLowerCase();
-
-      if (text === 'follow' && !testId.includes('unfollow') && !ariaLabel.includes('unfollow')) {
+    if (actualFollowBtn) {
+      const text = actualFollowBtn.textContent.trim().toLowerCase();
+      const testId = (actualFollowBtn.getAttribute('data-testid') || '').toLowerCase();
+      if (text === 'follow' && !testId.includes('unfollow')) {
         hasFollow = true;
       }
     }
@@ -231,7 +247,7 @@
       isProtected = true;
     }
 
-    // Also check for lock icon via aria-label
+    // Also check for lock icon via aria-label (verified)
     const lockIcon = document.querySelector(
       'svg[aria-label*="Protected"], svg[aria-label*="protected"]'
     );
@@ -297,7 +313,7 @@
       return { success: true, status: 'Following', alreadyFollowing: false };
     }
 
-    // Check for Pending
+    // Check for Pending (protected account)
     const allButtons = document.querySelectorAll('button');
     for (const btn of allButtons) {
       if (btn.textContent.trim().toLowerCase() === 'pending') {
@@ -338,7 +354,7 @@
       return { success: true };
     }
 
-    return { error: 'No Message/DM button found on X profile' };
+    return { error: 'No Message/DM button found on X profile', noMessage: true };
   }
 
   // ════════════════════════════════════════════════════════════
@@ -388,26 +404,24 @@
       return { error: 'Could not find DM input on X' };
     }
 
-    // Focus and type
+    // BUG FIX #3: Use execCommand for contenteditable React compatibility
     input.focus();
     await sleep(300);
 
-    // Clear existing content
-    input.textContent = '';
+    // Clear existing content using execCommand (not textContent = '')
+    document.execCommand('selectAll', false, null);
+    document.execCommand('delete', false, null);
     await sleep(100);
 
     // Type message using execCommand for contenteditable compatibility
     const lines = message.split('\n');
     for (let i = 0; i < lines.length; i++) {
-      document.execCommand('insertText', false, lines[i]);
+      if (lines[i]) {
+        document.execCommand('insertText', false, lines[i]);
+      }
       if (i < lines.length - 1) {
         // Shift+Enter for line break within DM
-        const enterEvent = new KeyboardEvent('keydown', {
-          key: 'Enter', code: 'Enter', keyCode: 13,
-          shiftKey: true, bubbles: true, cancelable: true
-        });
-        input.dispatchEvent(enterEvent);
-        document.execCommand('insertLineBreak');
+        document.execCommand('insertLineBreak', false, null);
       }
       await sleep(50);
     }
@@ -440,12 +454,19 @@
 
   // ════════════════════════════════════════════════════════════
   //  ACTION 7: TYPE AND SEND REPLY (fallback when DMs closed)
+  //  BUG FIX #7: Must be called when ON the tweet page, not profile
   // ════════════════════════════════════════════════════════════
 
-  async function handleTypeAndSendReply(message, tweetUrl) {
+  async function handleTypeAndSendReply(message) {
     if (!message) return { error: 'No reply message provided' };
 
-    // We should be on the tweet page already
+    // Verify we're on a tweet page (should contain /status/ in URL)
+    const currentUrl = window.location.href;
+    if (!currentUrl.includes('/status/')) {
+      return { error: 'Not on a tweet page — cannot reply. Navigate to a tweet first.' };
+    }
+
+    // Wait for page to load
     await sleep(1500);
 
     // First, click the reply area to activate it
@@ -504,10 +525,13 @@
       return { error: 'Could not find reply input on X tweet page' };
     }
 
-    // Focus and type
+    // BUG FIX #3: Use execCommand for contenteditable React compatibility
     input.focus();
     await sleep(300);
-    input.textContent = '';
+
+    // Clear existing content using execCommand
+    document.execCommand('selectAll', false, null);
+    document.execCommand('delete', false, null);
     await sleep(100);
 
     // Type the reply using execCommand
@@ -594,6 +618,68 @@
 
     // No DM button at all — DMs are closed
     return { canDM: false, reason: 'No DM button on profile — user has closed DMs' };
+  }
+
+  // ════════════════════════════════════════════════════════════
+  //  ACTION 10: FIND LATEST TWEET URL (for reply fallback)
+  //  IMPROVEMENT S4: Navigate to user's latest tweet for reply
+  // ════════════════════════════════════════════════════════════
+
+  async function handleFindLatestTweetUrl() {
+    await sleep(1500);
+
+    // We should be on the user's profile page
+    // Find the first tweet article that has a status link
+    const tweets = document.querySelectorAll('article[data-testid="tweet"]');
+
+    for (const tweet of tweets) {
+      // Find the time element which is inside the tweet's status link
+      const timeEl = tweet.querySelector('time');
+      if (timeEl) {
+        const statusLink = timeEl.closest('a[href*="/status/"]');
+        if (statusLink) {
+          const href = statusLink.getAttribute('href');
+          if (href && href.includes('/status/')) {
+            return { url: 'https://x.com' + href };
+          }
+        }
+      }
+    }
+
+    return { url: null, error: 'No tweets found on profile' };
+  }
+
+  // ════════════════════════════════════════════════════════════
+  //  ACTION 11: LIKE LATEST TWEET (before replying)
+  //  IMPROVEMENT S8: Like tweet before replying for visibility
+  // ════════════════════════════════════════════════════════════
+
+  async function handleLikeLatestTweet() {
+    await sleep(500);
+
+    // Find the first tweet's like button
+    const tweets = document.querySelectorAll('article[data-testid="tweet"]');
+    if (tweets.length === 0) {
+      return { success: false, error: 'No tweets found' };
+    }
+
+    // Use the first tweet (original tweet on a tweet page)
+    const firstTweet = tweets[0];
+    const likeBtn = firstTweet.querySelector('button[data-testid="like"]');
+
+    if (likeBtn) {
+      likeBtn.click();
+      await sleep(500);
+      return { success: true };
+    }
+
+    // Already liked
+    const unlikeBtn = firstTweet.querySelector('button[data-testid="unlike"]');
+    if (unlikeBtn) {
+      return { success: true, alreadyLiked: true };
+    }
+
+    return { success: false, error: 'Like button not found' };
   }
 
 })();

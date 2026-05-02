@@ -14,7 +14,7 @@
       <img src="icons/icon48.png" alt="" class="header-icon" />
       <div class="header-text">
         <h1>Influencer DM Manager</h1>
-        <span class="header-version">v10</span>
+        <span class="header-version">v11</span>
       </div>
     </div>
   </header>
@@ -186,6 +186,8 @@
               <label for="boDelay">Delay (sec)</label>
               <input id="boDelay" type="number" min="10" max="300" value="60" />
               <span id="boDelayWarning" class="delay-warning" style="display:none">Below 60s risks rate limiting or account ban.</span>
+              <span id="boLinkedinDelayHint" class="hint platform-hint linkedin-only" style="display:none">LinkedIn recommended: 90-120s. Max ~100 connections/day.</span>
+              <span id="boXDelayHint" class="hint platform-hint x-only" style="display:none">X recommended: 60-90s. DM limits vary by account age.</span>
             </div>
           </div>
 
@@ -229,6 +231,19 @@
                 <span>Skip private profiles entirely</span>
               </label>
               <span class="hint" style="margin-left:22px">Detect private accounts before following and skip them — no follow request sent.</span>
+
+              <label class="settings-option" style="margin-top:6px">
+                <input type="checkbox" id="settingXReplyFallback" checked />
+                <span>X: Reply to tweet when DMs closed</span>
+              </label>
+              <span class="hint" style="margin-left:22px">If user's DMs are closed, reply to their latest tweet instead.</span>
+
+              <label class="settings-option" style="margin-top:6px">
+                <input type="checkbox" id="settingLinkedinConnectNote" checked />
+                <span>LinkedIn: Send connection note as message</span>
+              </label>
+              <span class="hint" style="margin-left:22px">Use your DM template as the connection note (max 300 chars).</span>
+              <span id="linkedinNoteLength" class="hint" style="margin-left:22px;display:none;color:var(--warning)">Note: 0/300 characters</span>
             </div>
           </div>
 

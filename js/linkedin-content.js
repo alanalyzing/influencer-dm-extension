@@ -1,37 +1,40 @@
 /**
- * LinkedIn Content Script (v2) — Atomic Single-Page Actions for linkedin.com
+ * LinkedIn Content Script (v3) — Atomic Single-Page Actions for linkedin.com
  *
  * Updated with verified DOM selectors from real logged-in LinkedIn (May 2026).
+ * v3 fixes: Bug #1-6 from QA report, edge cases E1/E6/E7, improvements S2/S9/S10.
  *
  * KEY DOM FINDINGS:
- *   - LinkedIn uses obfuscated/hashed CSS class names — NEVER rely on class names
+ *   - LinkedIn uses obfuscated/hashed CSS class names — NEVER rely on class names alone
  *   - Connect button is an <a> tag with aria-label="Invite X to connect"
  *   - Message button is an <a> tag with text "Message" and href to /messaging/compose/
- *   - Follow button is a <button> with aria-label="Follow X"
+ *   - Follow button is a <button> with aria-label="Follow X" (NOT "Following X")
  *   - Messaging page uses <textarea role="textbox"> (NOT contenteditable div)
  *   - Messaging overlay uses div.msg-form__contenteditable (contenteditable)
  *   - Comments use <article class="comments-comment-entity">
  *   - Comment text: <span class="comments-comment-item__main-content">
  *   - Comment author links: a[href*="/in/"] inside comment blocks
+ *   - Connection notes are limited to 300 characters
  *
  * Actions:
  *   1. scanComments       — on a post page: scroll comments, extract, match keywords
  *   2. checkProfileActions — on a profile: detect Connect/Message/Follow/Pending buttons
- *   3. clickConnectButton — on a profile: click Connect (+ optional note)
+ *   3. clickConnectButton — on a profile: click Connect (+ optional note, max 300 chars)
  *   4. clickFollowButton  — on a profile: click Follow
  *   5. checkForMessageButton — after connect, check if Message button is available
  *   6. clickMessageButton — click Message button on profile
  *   7. typeAndSendDM      — on messaging overlay/page: type and send message
  *   8. checkIfPrivate     — check if profile has restricted messaging
- *   9. ping               — health check
+ *   9. getProfileInfo     — extract firstName, company, headline from profile
+ *  10. ping               — health check
  */
 
 (() => {
   'use strict';
 
   // Prevent duplicate injection
-  if (window.__IEM_LINKEDIN_V2__) return;
-  window.__IEM_LINKEDIN_V2__ = true;
+  if (window.__IEM_LINKEDIN_V3__) return;
+  window.__IEM_LINKEDIN_V3__ = true;
 
   if (window.__IEM_LINKEDIN_LISTENER__) {
     chrome.runtime.onMessage.removeListener(window.__IEM_LINKEDIN_LISTENER__);
@@ -52,15 +55,40 @@
   }
 
   // ─── Helper: find element by aria-label pattern ───
-  function findByAriaLabel(selector, pattern) {
+  function findByAriaLabel(selector, pattern, exclude = null) {
     const elements = document.querySelectorAll(selector);
     for (const el of elements) {
-      const aria = el.getAttribute('aria-label') || '';
-      if (aria.toLowerCase().includes(pattern.toLowerCase())) {
+      const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+      if (aria.includes(pattern.toLowerCase())) {
+        // BUG FIX #2: Exclude patterns (e.g., exclude "following" when looking for "follow")
+        if (exclude && aria.includes(exclude.toLowerCase())) continue;
         return el;
       }
     }
     return null;
+  }
+
+  // ─── Helper: type into input using execCommand for React compatibility ───
+  // BUG FIX #3 & #4: Use execCommand instead of direct value manipulation
+  function typeWithExecCommand(element, text) {
+    element.focus();
+    // Select all and delete existing content
+    document.execCommand('selectAll', false, null);
+    document.execCommand('delete', false, null);
+    // Insert the new text
+    document.execCommand('insertText', false, text);
+  }
+
+  // ─── Helper: type into textarea using native setter for React ───
+  // BUG FIX #4: Use native setter for React-controlled textareas
+  function typeIntoTextarea(textarea, text) {
+    textarea.focus();
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype, 'value'
+    ).set;
+    nativeSetter.call(textarea, text);
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
   // ─── Message Handler ───
@@ -75,6 +103,7 @@
       clickMessageButton: () => handleClickMessageButton(),
       typeAndSendDM: () => handleTypeAndSendDM(msg.message),
       checkIfPrivate: () => handleCheckIfPrivate(),
+      getProfileInfo: () => handleGetProfileInfo(),
       ping: () => Promise.resolve({ pong: true })
     };
 
@@ -114,13 +143,12 @@
         }
       }
 
-      // Also look for "X replies" buttons
-      const replyCountBtns = document.querySelectorAll(
-        'span.comments-comment-social-bar__replies-count--cr'
-      );
-      for (const span of replyCountBtns) {
-        const btn = span.closest('button');
-        if (btn) {
+      // BUG FIX #5: Use text-based matching instead of unstable class selectors
+      // Find reply count buttons by looking for buttons containing "repl" text
+      const allBtns = document.querySelectorAll('button');
+      for (const btn of allBtns) {
+        const text = btn.textContent.trim().toLowerCase();
+        if (text.match(/^\d+\s*repl/)) { // "3 replies", "1 reply"
           btn.click();
           await sleep(500);
         }
@@ -135,7 +163,7 @@
     const users = new Map();
 
     // Strategy 1: article.comments-comment-entity (verified DOM structure)
-    const commentArticles = document.querySelectorAll('article.comments-comment-entity');
+    const commentArticles = document.querySelectorAll('article[class*="comment"]');
     for (const article of commentArticles) {
       // Author link: <a href="/in/slug"> inside the comment meta section
       const authorLink = article.querySelector('a[href*="/in/"]');
@@ -147,15 +175,15 @@
 
       const username = usernameMatch[1];
 
-      // Display name from the meta description title
-      const nameEl = article.querySelector('span.comments-comment-meta__description-title') ||
-                     authorLink;
+      // Display name from the meta description title or link text
+      const nameEl = article.querySelector('[class*="comment-meta"]') || authorLink;
       const displayName = nameEl ? nameEl.textContent.trim().split('\n')[0].trim() : username;
 
-      // Comment text: <span class="comments-comment-item__main-content">
+      // Comment text: find span with comment content
       const commentTextEl = article.querySelector(
-        'span.comments-comment-item__main-content, ' +
-        'span.feed-shared-main-content--comment'
+        'span[class*="main-content"], ' +
+        'span[class*="comment-item"], ' +
+        'span[dir="ltr"]'
       );
       const commentText = commentTextEl ? commentTextEl.textContent.trim() : '';
 
@@ -187,7 +215,7 @@
         if (seenUsernames.has(username)) continue;
         seenUsernames.add(username);
 
-        // Walk up to find a comment container (article or div with comment-related class/data)
+        // Walk up to find a comment container
         const parentComment = link.closest(
           'article, [data-id*="comment"], [class*="comment"]'
         );
@@ -195,9 +223,7 @@
 
         // Get comment text from nearby span/div
         const textEl = parentComment.querySelector(
-          'span.comments-comment-item__main-content, ' +
-          'span.feed-shared-main-content--comment, ' +
-          'span[dir="ltr"], div[dir="ltr"]'
+          'span[class*="main-content"], span[dir="ltr"], div[dir="ltr"]'
         );
         const text = textEl ? textEl.textContent.trim() : '';
         const textLower = text.toLowerCase();
@@ -230,6 +256,7 @@
     let hasFollow = false;
     let isPending = false;
     let isConnected = false;
+    let hasOpenProfile = false;
 
     // IMPORTANT: LinkedIn profile uses BOTH <a> and <button> tags for actions
     // Connect = <a> with aria-label="Invite X to connect"
@@ -254,27 +281,34 @@
       if (text === 'Message' && href.includes('/messaging/')) {
         hasMessage = true;
       }
+
+      // IMPROVEMENT E6: Detect "Open Profile" messaging (premium)
+      if (text.includes('Open Profile') || href.includes('open-profile')) {
+        hasOpenProfile = true;
+        hasMessage = true; // Can message via Open Profile
+      }
     }
 
     // Check <button> tags (Follow, Pending, More)
     const allButtons = document.querySelectorAll('button');
     for (const btn of allButtons) {
       const text = btn.textContent.trim();
-      const ariaLabel = (btn.getAttribute('aria-label') || '');
+      const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
 
-      // Follow: <button aria-label="Follow X">
-      if (ariaLabel.toLowerCase().startsWith('follow ') || text === 'Follow') {
+      // BUG FIX #2: Follow button — exclude "Following" from match
+      if ((ariaLabel.startsWith('follow ') && !ariaLabel.startsWith('following ')) ||
+          (text === 'Follow' && !ariaLabel.includes('following'))) {
         hasFollow = true;
       }
 
       // Pending: button text or aria-label
       if (text === 'Pending' || text.toLowerCase().includes('pending') ||
-          ariaLabel.toLowerCase().includes('pending')) {
+          ariaLabel.includes('pending')) {
         isPending = true;
       }
 
       // Message button (sometimes it's a button too)
-      if (text === 'Message' || ariaLabel.toLowerCase() === 'message') {
+      if (text === 'Message' || ariaLabel === 'message') {
         hasMessage = true;
       }
     }
@@ -297,6 +331,7 @@
       hasFollow,
       isPending,
       isConnected,
+      hasOpenProfile,
       isFollowing: isConnected,
       isRequested: isPending
     };
@@ -310,6 +345,7 @@
     // LinkedIn Connect button is an <a> tag with aria-label="Invite X to connect"
     // or text "Connect" with href to /preload/custom-invite/
     let connectEl = null;
+    let foundViaDropdown = false;
 
     // Strategy 1: Find <a> with aria-label "Invite X to connect"
     connectEl = findByAriaLabel('a', 'to connect');
@@ -335,27 +371,43 @@
       connectEl = findElementByText('button', 'Connect', true);
     }
 
-    // Strategy 4: Check the "More" dropdown for Connect option
+    // IMPROVEMENT S10: Strategy 4: Check the "More" dropdown for Connect option
+    // (For creator profiles where Follow is primary and Connect is in More menu)
     if (!connectEl) {
-      const moreBtn = findByAriaLabel('button', 'More');
+      const moreBtn = findByAriaLabel('button', 'more');
       if (moreBtn) {
         moreBtn.click();
-        await sleep(800);
+        // EDGE CASE E1: Increase wait for slow connections
+        await sleep(1500);
 
         // Look for Connect in the dropdown menu
-        const menuItems = document.querySelectorAll('[role="menuitem"], [role="option"], li');
+        const menuItems = document.querySelectorAll('[role="menuitem"], [role="option"], li, div[role="button"]');
         for (const item of menuItems) {
           const text = item.textContent.trim().toLowerCase();
-          if (text.includes('connect')) {
+          if (text.includes('connect') && !text.includes('disconnect')) {
             item.click();
-            await sleep(800);
+            foundViaDropdown = true;
+            await sleep(1000);
             break;
           }
+        }
+
+        // If Connect wasn't found in dropdown, close it
+        if (!foundViaDropdown) {
+          // Press Escape to close dropdown
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+          await sleep(300);
         }
       }
     }
 
-    if (connectEl) {
+    // BUG FIX #1: Return error if Connect button was NOT found after all strategies
+    if (!connectEl && !foundViaDropdown) {
+      return { success: false, error: 'No Connect button found on this profile' };
+    }
+
+    // Click the Connect element (if not already clicked via dropdown)
+    if (connectEl && !foundViaDropdown) {
       connectEl.click();
       await sleep(1000);
     }
@@ -364,7 +416,19 @@
     // LinkedIn shows a modal with "Add a note" option
     await sleep(1500);
 
+    // EDGE CASE E7: Check for "Email required" modal
+    const emailInput = document.querySelector('input[type="email"], input[name="email"]');
+    if (emailInput) {
+      // Close the modal and return error
+      const closeBtn = document.querySelector('button[aria-label="Dismiss"], button[aria-label="Close"]');
+      if (closeBtn) closeBtn.click();
+      return { success: false, error: 'Email required to connect — skipping' };
+    }
+
     if (note) {
+      // BUG FIX #8: Truncate note to 300 characters (LinkedIn limit)
+      const truncatedNote = note.length > 300 ? note.substring(0, 297) + '...' : note;
+
       // Click "Add a note" button
       const addNoteBtn = findElementByText('button', 'Add a note', false);
       if (addNoteBtn) {
@@ -374,7 +438,7 @@
         // Find the note textarea — try multiple selectors
         let noteInput = document.querySelector('textarea[name="message"]') ||
                         document.querySelector('textarea#custom-message') ||
-                        document.querySelector('textarea.connect-button-send-invite__custom-message');
+                        document.querySelector('textarea[class*="custom-message"]');
 
         // Fallback: find any visible textarea in the modal
         if (!noteInput) {
@@ -388,13 +452,8 @@
         }
 
         if (noteInput) {
-          noteInput.focus();
-          noteInput.value = '';
-          // Type character by character for React compatibility
-          for (const char of note) {
-            noteInput.value += char;
-            noteInput.dispatchEvent(new Event('input', { bubbles: true }));
-          }
+          // BUG FIX #4: Use native setter for React-controlled textarea
+          typeIntoTextarea(noteInput, truncatedNote);
           await sleep(300);
         }
       }
@@ -409,7 +468,7 @@
            text.includes('send without')) && !btn.disabled) {
         btn.click();
         await sleep(500);
-        return { success: true, status: 'Pending', alreadyFollowing: false };
+        return { success: true, status: 'Pending', alreadyFollowing: false, noteTruncated: note && note.length > 300 };
       }
     }
 
@@ -422,16 +481,31 @@
   // ════════════════════════════════════════════════════════════
 
   async function handleClickFollowButton() {
-    // Follow button is a <button> with aria-label="Follow X"
-    let followBtn = findByAriaLabel('button', 'Follow ');
+    // BUG FIX #2: Follow button is a <button> with aria-label="Follow X"
+    // MUST exclude "Following X" to avoid accidentally unfollowing
+    let followBtn = findByAriaLabel('button', 'follow ', 'following');
+
     if (!followBtn) {
-      followBtn = findElementByText('button', 'Follow', true);
+      // Find button with exact text "Follow" (not "Following")
+      const allBtns = document.querySelectorAll('button');
+      for (const btn of allBtns) {
+        const text = btn.textContent.trim();
+        if (text === 'Follow') {
+          followBtn = btn;
+          break;
+        }
+      }
     }
 
     if (followBtn) {
       followBtn.click();
       await sleep(1000);
       return { success: true, status: 'Following', alreadyFollowing: false };
+    }
+
+    // Check if already following
+    if (findByAriaLabel('button', 'following') || findElementByText('button', 'Following', true)) {
+      return { success: true, status: 'Following', alreadyFollowing: true };
     }
 
     return { success: false, error: 'No Follow button found' };
@@ -493,7 +567,7 @@
       return { success: true };
     }
 
-    return { error: 'No Message button found' };
+    return { error: 'No Message button found', noMessage: true };
   }
 
   // ════════════════════════════════════════════════════════════
@@ -551,28 +625,29 @@
     await sleep(300);
 
     if (inputType === 'textarea') {
-      // For textarea: set value and dispatch events
-      input.value = '';
-      // Use execCommand for React compatibility
+      // BUG FIX #4: Use native setter for React-controlled textarea
+      typeIntoTextarea(input, message);
+      await sleep(300);
+    } else {
+      // BUG FIX #3: Use execCommand for contenteditable React compatibility
+      input.focus();
       document.execCommand('selectAll', false, null);
       document.execCommand('delete', false, null);
       await sleep(100);
 
-      // Type the message
-      for (const char of message) {
-        input.value += char;
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-      }
-      input.dispatchEvent(new Event('change', { bubbles: true }));
-      await sleep(300);
-    } else {
-      // For contenteditable: use innerHTML with <p> tags for line breaks
-      input.innerHTML = '';
-      await sleep(100);
-
+      // Type message with line breaks using Shift+Enter simulation
       const lines = message.split('\n');
-      const htmlContent = lines.map(line => `<p>${line || '<br>'}</p>`).join('');
-      input.innerHTML = htmlContent;
+      for (let i = 0; i < lines.length; i++) {
+        if (i > 0) {
+          // Insert line break via Shift+Enter
+          input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true }));
+          input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', shiftKey: true, bubbles: true }));
+          document.execCommand('insertLineBreak', false, null);
+        }
+        if (lines[i]) {
+          document.execCommand('insertText', false, lines[i]);
+        }
+      }
       input.dispatchEvent(new Event('input', { bubbles: true }));
       await sleep(300);
     }
@@ -622,14 +697,20 @@
   // ════════════════════════════════════════════════════════════
 
   async function handleCheckIfPrivate() {
+    // BUG FIX #5: Check for "LinkedIn Member" specifically in the main heading
+    // not just anywhere on the page (avoids false positives from sidebar)
+    const heading = document.querySelector('h1');
+    if (heading && heading.textContent.trim() === 'LinkedIn Member') {
+      return { isPrivate: true, reason: 'Restricted profile (LinkedIn Member)' };
+    }
+
     const pageText = document.body.innerText || '';
 
     // Check for restricted profile indicators
     const restrictedIndicators = [
       'Profile not available',
       'This profile is not available',
-      'member chose to be shown',
-      'LinkedIn Member' // Generic profile (restricted)
+      'member chose to be shown'
     ];
 
     for (const indicator of restrictedIndicators) {
@@ -661,6 +742,45 @@
     }
 
     return { isPrivate: false, canMessage: false, reason: 'No message button and unknown degree' };
+  }
+
+  // ════════════════════════════════════════════════════════════
+  //  ACTION 9: GET PROFILE INFO (for template variables)
+  //  IMPROVEMENT S9: Extract firstName, company, headline
+  // ════════════════════════════════════════════════════════════
+
+  async function handleGetProfileInfo() {
+    await sleep(1000);
+
+    // Extract display name from h1
+    const h1 = document.querySelector('h1');
+    const fullName = h1 ? h1.textContent.trim() : '';
+    const firstName = fullName.split(' ')[0] || '';
+
+    // Extract headline (usually the text below the name)
+    let headline = '';
+    const headlineEl = document.querySelector('[data-generated-suggestion-target*="headline"]') ||
+                       document.querySelector('div.text-body-medium');
+    if (headlineEl) {
+      headline = headlineEl.textContent.trim();
+    }
+
+    // Extract company from headline or experience section
+    let company = '';
+    if (headline) {
+      // Common patterns: "Role at Company" or "Role | Company"
+      const atMatch = headline.match(/(?:at|@)\s+(.+?)(?:\s*[|·]|$)/i);
+      const pipeMatch = headline.match(/[|·]\s*(.+?)(?:\s*[|·]|$)/);
+      if (atMatch) company = atMatch[1].trim();
+      else if (pipeMatch) company = pipeMatch[1].trim();
+    }
+
+    return {
+      fullName,
+      firstName,
+      headline,
+      company
+    };
   }
 
 })();

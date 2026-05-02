@@ -4,6 +4,37 @@
 
 ---
 
+## What's New in v11
+
+### QA Fixes & Multi-Platform Reliability Overhaul
+
+All LinkedIn and X content scripts have been rewritten with verified DOM selectors from real logged-in sessions. 8 bugs fixed, 6 edge cases handled, 10 improvements implemented.
+
+### Bug Fixes
+- **LinkedIn Connect button** is an `<a>` tag, not `<button>` — fixed selector to use `aria-label="Invite X to connect"`
+- **LinkedIn "Following" false match** — Follow button now uses exact text match to avoid accidentally unfollowing
+- **React contenteditable input** — Both LinkedIn and X now use `execCommand('insertText')` + InputEvent dispatch for proper React state sync
+- **X reply fallback navigates to tweet** — Reply input only exists on tweet pages, not profiles. Now finds latest tweet URL and navigates there first
+- **LinkedIn keyword scan uses Connect+Note** — Previously fell back to Follow (useless on LinkedIn), now sends connection request with personalized note
+- **Waitlist re-check is multi-platform** — Previously hardcoded to Instagram, now routes to correct platform per user
+- **Cadence follow-ups are multi-platform** — Stores and uses platform field for each cadence item
+
+### New Platform-Specific Settings
+- **"X: Reply to tweet when DMs closed"** toggle — disable to skip users with closed DMs instead of replying
+- **"LinkedIn: Send connection note as message"** toggle — uses DM template as connection note (max 300 chars)
+- **Platform-specific delay hints** — LinkedIn recommends 90-120s, X recommends 60-90s
+- **Auto-adjusted default delay** — LinkedIn defaults to 90s, others to 60s
+
+### Edge Cases Handled
+- LinkedIn "More" dropdown for Connect button (hidden behind overflow menu)
+- LinkedIn connection note 300-char truncation with warning
+- X protected accounts detected before follow attempt
+- X rate limit detection (429 responses)
+- Graceful handling when no tweets found for reply fallback
+- LinkedIn messaging page textarea vs contenteditable detection
+
+---
+
 ## What's New in v10
 
 ### Multi-Platform: LinkedIn & X (Twitter) Support

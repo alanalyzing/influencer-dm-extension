@@ -153,6 +153,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const settingDMAfterFollow = $('settingDMAfterFollow');
   const settingWaitlistPrivate = $('settingWaitlistPrivate');
   const settingSkipPrivate = $('settingSkipPrivate');
+  const settingXReplyFallback = $('settingXReplyFallback');
+  const settingLinkedinConnectNote = $('settingLinkedinConnectNote');
 
   // ─── State ───
   let currentStep = 1;
@@ -219,6 +221,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (postUrlInput) postUrlInput.placeholder = l.postPlaceholder;
     if (boHandlesLabel) boHandlesLabel.textContent = l.handles;
     if (boHandlesInput) boHandlesInput.placeholder = l.handlesPlaceholder;
+
+    // Show/hide platform-specific hints
+    const linkedinHint = document.getElementById('boLinkedinDelayHint');
+    const xHint = document.getElementById('boXDelayHint');
+    if (linkedinHint) linkedinHint.style.display = (currentPlatform === 'linkedin') ? 'block' : 'none';
+    if (xHint) xHint.style.display = (currentPlatform === 'x') ? 'block' : 'none';
+
+    // Show/hide platform-specific settings
+    const xReplyOpt = document.getElementById('settingXReplyFallback');
+    const linkedinNoteOpt = document.getElementById('settingLinkedinConnectNote');
+    const linkedinNoteLen = document.getElementById('linkedinNoteLength');
+    if (xReplyOpt) xReplyOpt.closest('.settings-option').style.display = (currentPlatform === 'x') ? 'flex' : 'none';
+    if (linkedinNoteOpt) linkedinNoteOpt.closest('.settings-option').style.display = (currentPlatform === 'linkedin') ? 'flex' : 'none';
+    if (linkedinNoteLen) linkedinNoteLen.style.display = (currentPlatform === 'linkedin') ? 'block' : 'none';
+
+    // Update delay default based on platform
+    const delayEl = document.getElementById('boDelay');
+    if (delayEl && !delayEl.dataset.userModified) {
+      if (currentPlatform === 'linkedin') delayEl.value = '90';
+      else if (currentPlatform === 'x') delayEl.value = '60';
+      else delayEl.value = '60';
+    }
   }
 
 
@@ -844,7 +868,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       alwaysFollow: settingAlwaysFollow?.checked ?? true,
       dmAfterFollow: settingDMAfterFollow?.checked ?? true,
       waitlistPrivate: settingWaitlistPrivate?.checked ?? true,
-      skipPrivate: settingSkipPrivate?.checked ?? false
+      skipPrivate: settingSkipPrivate?.checked ?? false,
+      xReplyFallback: settingXReplyFallback?.checked ?? true,
+      linkedinConnectNote: settingLinkedinConnectNote?.checked ?? true
     };
 
     await bg({ action: 'startBulkOutreach', outreachList, delaySeconds: delaySec, cadenceConfig, platform: currentPlatform, behaviorSettings });
