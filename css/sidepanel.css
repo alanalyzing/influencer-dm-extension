@@ -817,18 +817,25 @@ body.platform-x .header {
   display: flex;
   background: var(--card-bg);
   border-bottom: 1px solid var(--border);
-  padding: 0 8px;
+  padding: 0 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
+.sub-tabs::-webkit-scrollbar { display: none; }
 
 .sub-tab {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 9px 12px;
+  padding: 8px 8px;
   border: none;
   background: none;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
   font-family: inherit;
   color: var(--text-muted);
   cursor: pointer;

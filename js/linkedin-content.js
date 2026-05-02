@@ -577,47 +577,99 @@
   async function handleTypeAndSendDM(message) {
     if (!message) return { error: 'No message provided' };
 
-    // Wait for the messaging overlay/page to open
-    await sleep(2000);
+    // Wait for the messaging overlay/page to fully render
+    await sleep(3000);
 
-    // LinkedIn has TWO different message input types:
-    // 1. Overlay (bottom-right): div.msg-form__contenteditable (contenteditable)
-    // 2. Full page (/messaging/): textarea[role="textbox"] with hint "Write a message..."
+    // LinkedIn messaging input detection — comprehensive selector strategy
+    // LinkedIn uses different input types depending on context:
+    //   - Overlay (bottom-right popup): contenteditable div
+    //   - Full messaging page: contenteditable div or textarea
+    //   - New compose modal: contenteditable div with p children
 
     let input = null;
     let inputType = null; // 'contenteditable' or 'textarea'
 
-    for (let attempt = 0; attempt < 20; attempt++) {
-      // Try textarea first (full messaging page)
-      input = document.querySelector('textarea[role="textbox"]');
-      if (input) {
-        inputType = 'textarea';
-        break;
+    const SELECTORS = [
+      // Most common: contenteditable div inside msg-form
+      'div.msg-form__contenteditable[contenteditable="true"]',
+      // Contenteditable with role textbox
+      'div[role="textbox"][contenteditable="true"]',
+      // Aria-label based
+      'div[aria-label="Write a message…"][contenteditable="true"]',
+      'div[aria-label="Write a message..."][contenteditable="true"]',
+      'div[aria-label*="Write a message"][contenteditable="true"]',
+      // Data-placeholder based
+      'div[data-placeholder="Write a message…"][contenteditable="true"]',
+      'div[data-placeholder*="Write a message"][contenteditable="true"]',
+      // Paragraph inside contenteditable (LinkedIn sometimes nests p inside div)
+      'div.msg-form__msg-content-container div[contenteditable="true"]',
+      // Any contenteditable inside a messaging form
+      'form.msg-form div[contenteditable="true"]',
+      'div[class*="msg-form"] div[contenteditable="true"]',
+      // Textarea fallback (older LinkedIn or full page)
+      'textarea[role="textbox"]',
+      'textarea[name="message"]',
+      'textarea[aria-label*="message"]',
+      // Very broad: any contenteditable in the messaging overlay
+      'div.msg-overlay-conversation-bubble div[contenteditable="true"]',
+      'div[class*="msg-overlay"] div[contenteditable="true"]',
+      'div[class*="messaging"] div[contenteditable="true"]',
+      // Broadest fallback: any visible contenteditable that's not the main page
+      'div[contenteditable="true"][role="textbox"]'
+    ];
+
+    for (let attempt = 0; attempt < 30; attempt++) {
+      for (const selector of SELECTORS) {
+        const el = document.querySelector(selector);
+        if (el && el.offsetParent !== null) { // visible check
+          input = el;
+          inputType = el.tagName === 'TEXTAREA' ? 'textarea' : 'contenteditable';
+          break;
+        }
+      }
+      if (input) break;
+
+      // Also try finding by scanning all contenteditable elements
+      if (attempt > 10) {
+        const allEditable = document.querySelectorAll('[contenteditable="true"]');
+        for (const el of allEditable) {
+          // Must be visible and inside a messaging context
+          if (el.offsetParent !== null && el.offsetHeight > 20) {
+            const parent = el.closest('[class*="msg"], [class*="messaging"], [class*="overlay"]');
+            if (parent) {
+              input = el;
+              inputType = 'contenteditable';
+              break;
+            }
+          }
+        }
+        if (input) break;
       }
 
-      // Try contenteditable div (overlay)
-      input = document.querySelector('div.msg-form__contenteditable[contenteditable="true"]');
-      if (input) {
-        inputType = 'contenteditable';
-        break;
-      }
-
-      // Try generic contenteditable with message-related attributes
-      input = document.querySelector(
-        'div[role="textbox"][contenteditable="true"], ' +
-        'div[aria-label*="Write a message"][contenteditable="true"], ' +
-        'div[data-placeholder*="Write a message"][contenteditable="true"]'
-      );
-      if (input) {
-        inputType = 'contenteditable';
-        break;
+      // Last resort: any visible contenteditable that appeared after clicking Message
+      if (attempt > 20) {
+        const allEditable = document.querySelectorAll('[contenteditable="true"]');
+        for (const el of allEditable) {
+          if (el.offsetParent !== null && el.offsetHeight > 20 && el.offsetHeight < 300) {
+            input = el;
+            inputType = 'contenteditable';
+            break;
+          }
+        }
+        if (input) break;
       }
 
       await sleep(500);
     }
 
     if (!input) {
-      return { error: 'Could not find message input on LinkedIn' };
+      // Log what we can see for debugging
+      const editables = document.querySelectorAll('[contenteditable="true"]');
+      const textareas = document.querySelectorAll('textarea');
+      return { 
+        error: 'Could not find message input on LinkedIn',
+        debug: `Found ${editables.length} contenteditable elements, ${textareas.length} textareas on page`
+      };
     }
 
     // Focus the input
