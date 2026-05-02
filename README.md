@@ -4,6 +4,23 @@
 
 ---
 
+## What's New in v11.1
+
+### LinkedIn "Could not find message input" Fix
+
+The primary bug causing LinkedIn DMs to fail has been fixed. The root cause: LinkedIn's messaging overlay (and full messaging page) uses a `<textarea role="textbox">` inside `<form id="msg-form-ember*">`, rendered dynamically by Ember.js after the overlay animation completes. The previous code prioritized `contenteditable` div selectors that no longer exist in LinkedIn's current DOM.
+
+**Changes:**
+- **Textarea-first selector strategy** — 9 textarea selectors now run before 11 contenteditable fallbacks
+- **Progressive retry with 4 phases** — targeted selectors → contenteditable fallback → broad textarea scan → broad contenteditable scan
+- **40 retry attempts** (up from 30) with 500ms intervals = 20s total wait for overlay rendering
+- **Double-check textarea value** — if native setter doesn't stick, falls back to `execCommand`
+- **Smarter Send button detection** — looks inside the same `<form>` first, then by proximity to input
+- **Enhanced debug output** — reports textarea count, form count, and overlay count on failure
+- **Fixed `sendToTab` retry injection** — retries now detect platform from tab URL instead of defaulting to Instagram
+
+---
+
 ## What's New in v11
 
 ### QA Fixes & Multi-Platform Reliability Overhaul

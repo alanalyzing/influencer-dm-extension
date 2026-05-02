@@ -1372,7 +1372,20 @@ async function sendToTab(tabId, msg, retries = 3) {
     try {
       return await chrome.tabs.sendMessage(tabId, msg);
     } catch (e) {
-      if (i < retries - 1) { await delay(1500); await injectContentScript(tabId); await delay(500); }
+      if (i < retries - 1) {
+        await delay(1500);
+        // Detect platform from tab URL so we inject the correct content script
+        let retryPlatform = 'instagram';
+        try {
+          const tab = await chrome.tabs.get(tabId);
+          const url = tab.url || '';
+          if (url.includes('linkedin.com')) retryPlatform = 'linkedin';
+          else if (url.includes('x.com') || url.includes('twitter.com')) retryPlatform = 'x';
+          else if (url.includes('threads.net')) retryPlatform = 'threads';
+        } catch (_) {}
+        await injectContentScript(tabId, retryPlatform);
+        await delay(500);
+      }
       else throw e;
     }
   }

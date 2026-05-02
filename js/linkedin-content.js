@@ -1,16 +1,19 @@
 /**
- * LinkedIn Content Script (v3) — Atomic Single-Page Actions for linkedin.com
+ * LinkedIn Content Script (v4) — Atomic Single-Page Actions for linkedin.com
  *
  * Updated with verified DOM selectors from real logged-in LinkedIn (May 2026).
  * v3 fixes: Bug #1-6 from QA report, edge cases E1/E6/E7, improvements S2/S9/S10.
+ * v4 fixes: "Could not find message input" — textarea-first selector strategy.
  *
  * KEY DOM FINDINGS:
  *   - LinkedIn uses obfuscated/hashed CSS class names — NEVER rely on class names alone
  *   - Connect button is an <a> tag with aria-label="Invite X to connect"
  *   - Message button is an <a> tag with text "Message" and href to /messaging/compose/
  *   - Follow button is a <button> with aria-label="Follow X" (NOT "Following X")
- *   - Messaging page uses <textarea role="textbox"> (NOT contenteditable div)
- *   - Messaging overlay uses div.msg-form__contenteditable (contenteditable)
+ *   - Messaging uses <textarea role="textbox"> inside <form id="msg-form-ember*">
+ *   - This applies to BOTH the full messaging page AND the profile overlay popup
+ *   - The overlay is rendered entirely by Ember.js — NOT in initial HTML
+ *   - Send button is <button> with text "Send" inside the same form
  *   - Comments use <article class="comments-comment-entity">
  *   - Comment text: <span class="comments-comment-item__main-content">
  *   - Comment author links: a[href*="/in/"] inside comment blocks
@@ -578,65 +581,118 @@
     if (!message) return { error: 'No message provided' };
 
     // Wait for the messaging overlay/page to fully render
+    // LinkedIn overlay is rendered dynamically by Ember.js — needs generous wait
     await sleep(3000);
 
-    // LinkedIn messaging input detection — comprehensive selector strategy
-    // LinkedIn uses different input types depending on context:
-    //   - Overlay (bottom-right popup): contenteditable div
-    //   - Full messaging page: contenteditable div or textarea
-    //   - New compose modal: contenteditable div with p children
+    // LinkedIn messaging input detection — VERIFIED May 2026
+    // KEY FINDING: LinkedIn uses <textarea role="textbox"> inside <form id="msg-form-ember*">
+    // for BOTH the full messaging page AND the profile overlay popup.
+    // The overlay is rendered entirely by JavaScript (Ember.js) — it does NOT exist
+    // in the initial HTML. The textarea appears after the overlay animation completes.
+    //
+    // Priority order: textarea first (verified), then contenteditable fallbacks.
 
     let input = null;
     let inputType = null; // 'contenteditable' or 'textarea'
 
-    const SELECTORS = [
-      // Most common: contenteditable div inside msg-form
-      'div.msg-form__contenteditable[contenteditable="true"]',
-      // Contenteditable with role textbox
-      'div[role="textbox"][contenteditable="true"]',
-      // Aria-label based
-      'div[aria-label="Write a message…"][contenteditable="true"]',
-      'div[aria-label="Write a message..."][contenteditable="true"]',
-      'div[aria-label*="Write a message"][contenteditable="true"]',
-      // Data-placeholder based
-      'div[data-placeholder="Write a message…"][contenteditable="true"]',
-      'div[data-placeholder*="Write a message"][contenteditable="true"]',
-      // Paragraph inside contenteditable (LinkedIn sometimes nests p inside div)
-      'div.msg-form__msg-content-container div[contenteditable="true"]',
-      // Any contenteditable inside a messaging form
-      'form.msg-form div[contenteditable="true"]',
-      'div[class*="msg-form"] div[contenteditable="true"]',
-      // Textarea fallback (older LinkedIn or full page)
+    // Phase 1 selectors: TEXTAREA (verified working on LinkedIn May 2026)
+    const TEXTAREA_SELECTORS = [
+      // Primary: textarea inside Ember msg-form (verified on full messaging page)
+      'form[id^="msg-form"] textarea',
+      // Textarea with role textbox (verified: element has role="textbox")
       'textarea[role="textbox"]',
+      // Textarea with aria-label containing Write a message
+      'textarea[aria-label*="Write a message"]',
+      // Textarea with placeholder containing Write a message
+      'textarea[placeholder*="Write a message"]',
+      // Any textarea inside a form that looks like messaging
+      'form[id*="msg"] textarea',
+      // Any textarea with name message
       'textarea[name="message"]',
+      // Any textarea with aria-label containing message
       'textarea[aria-label*="message"]',
-      // Very broad: any contenteditable in the messaging overlay
+      'textarea[aria-label*="Message"]',
+      // Broadest textarea: any visible textarea on the page
+      'textarea'
+    ];
+
+    // Phase 2 selectors: CONTENTEDITABLE (fallback for older LinkedIn versions)
+    const CONTENTEDITABLE_SELECTORS = [
+      'div.msg-form__contenteditable[contenteditable="true"]',
+      'div[role="textbox"][contenteditable="true"]',
+      'div[aria-label*="Write a message"][contenteditable="true"]',
+      'div[data-placeholder*="Write a message"][contenteditable="true"]',
+      'div.msg-form__msg-content-container div[contenteditable="true"]',
+      'form[id^="msg-form"] div[contenteditable="true"]',
+      'div[class*="msg-form"] div[contenteditable="true"]',
       'div.msg-overlay-conversation-bubble div[contenteditable="true"]',
       'div[class*="msg-overlay"] div[contenteditable="true"]',
       'div[class*="messaging"] div[contenteditable="true"]',
-      // Broadest fallback: any visible contenteditable that's not the main page
       'div[contenteditable="true"][role="textbox"]'
     ];
 
-    for (let attempt = 0; attempt < 30; attempt++) {
-      for (const selector of SELECTORS) {
-        const el = document.querySelector(selector);
-        if (el && el.offsetParent !== null) { // visible check
-          input = el;
-          inputType = el.tagName === 'TEXTAREA' ? 'textarea' : 'contenteditable';
-          break;
-        }
+    // Retry loop with increasing desperation
+    for (let attempt = 0; attempt < 40; attempt++) {
+      // Phase 1: Try textarea selectors first (highest priority)
+      for (const selector of TEXTAREA_SELECTORS) {
+        try {
+          const els = document.querySelectorAll(selector);
+          for (const el of els) {
+            // Must be visible (offsetParent not null or has dimensions)
+            if (el.offsetParent !== null || (el.offsetWidth > 0 && el.offsetHeight > 0)) {
+              // For the broadest 'textarea' selector, verify it's in a messaging context
+              if (selector === 'textarea') {
+                const inMsgContext = el.closest(
+                  'form[id*="msg"], [class*="msg-form"], [class*="msg-overlay"], ' +
+                  '[class*="messaging"], [class*="compose"], [id*="msg"]'
+                );
+                if (!inMsgContext) continue;
+              }
+              input = el;
+              inputType = 'textarea';
+              break;
+            }
+          }
+        } catch (e) { /* selector parse error, skip */ }
+        if (input) break;
       }
       if (input) break;
 
-      // Also try finding by scanning all contenteditable elements
-      if (attempt > 10) {
+      // Phase 2: Try contenteditable selectors
+      for (const selector of CONTENTEDITABLE_SELECTORS) {
+        try {
+          const el = document.querySelector(selector);
+          if (el && (el.offsetParent !== null || (el.offsetWidth > 0 && el.offsetHeight > 0))) {
+            input = el;
+            inputType = 'contenteditable';
+            break;
+          }
+        } catch (e) { /* skip */ }
+        if (input) break;
+      }
+      if (input) break;
+
+      // Phase 3 (attempt > 15): Scan ALL textareas on page
+      if (attempt > 15) {
+        const allTextareas = document.querySelectorAll('textarea');
+        for (const ta of allTextareas) {
+          if ((ta.offsetParent !== null || ta.offsetHeight > 0) && ta.offsetHeight < 500) {
+            input = ta;
+            inputType = 'textarea';
+            break;
+          }
+        }
+        if (input) break;
+      }
+
+      // Phase 4 (attempt > 25): Scan ALL contenteditable elements
+      if (attempt > 25) {
         const allEditable = document.querySelectorAll('[contenteditable="true"]');
         for (const el of allEditable) {
-          // Must be visible and inside a messaging context
-          if (el.offsetParent !== null && el.offsetHeight > 20) {
-            const parent = el.closest('[class*="msg"], [class*="messaging"], [class*="overlay"]');
-            if (parent) {
+          if (el.offsetParent !== null && el.offsetHeight > 20 && el.offsetHeight < 300) {
+            // Prefer elements that look like message inputs
+            const rect = el.getBoundingClientRect();
+            if (rect.bottom > window.innerHeight * 0.5) { // bottom half of screen
               input = el;
               inputType = 'contenteditable';
               break;
@@ -646,29 +702,18 @@
         if (input) break;
       }
 
-      // Last resort: any visible contenteditable that appeared after clicking Message
-      if (attempt > 20) {
-        const allEditable = document.querySelectorAll('[contenteditable="true"]');
-        for (const el of allEditable) {
-          if (el.offsetParent !== null && el.offsetHeight > 20 && el.offsetHeight < 300) {
-            input = el;
-            inputType = 'contenteditable';
-            break;
-          }
-        }
-        if (input) break;
-      }
-
       await sleep(500);
     }
 
     if (!input) {
-      // Log what we can see for debugging
+      // Enhanced debug info
       const editables = document.querySelectorAll('[contenteditable="true"]');
       const textareas = document.querySelectorAll('textarea');
+      const forms = document.querySelectorAll('form[id*="msg"]');
+      const overlays = document.querySelectorAll('[class*="msg-overlay"], [class*="messaging"]');
       return { 
         error: 'Could not find message input on LinkedIn',
-        debug: `Found ${editables.length} contenteditable elements, ${textareas.length} textareas on page`
+        debug: `editables=${editables.length}, textareas=${textareas.length}, msg-forms=${forms.length}, overlays=${overlays.length}`
       };
     }
 
@@ -677,11 +722,21 @@
     await sleep(300);
 
     if (inputType === 'textarea') {
-      // BUG FIX #4: Use native setter for React-controlled textarea
+      // Use native setter for Ember/React-controlled textarea
       typeIntoTextarea(input, message);
-      await sleep(300);
+      await sleep(500);
+
+      // Double-check: if value didn't stick, try execCommand approach
+      if (input.value !== message) {
+        input.focus();
+        document.execCommand('selectAll', false, null);
+        document.execCommand('delete', false, null);
+        document.execCommand('insertText', false, message);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        await sleep(300);
+      }
     } else {
-      // BUG FIX #3: Use execCommand for contenteditable React compatibility
+      // Use execCommand for contenteditable (React/Ember compatibility)
       input.focus();
       document.execCommand('selectAll', false, null);
       document.execCommand('delete', false, null);
@@ -691,7 +746,6 @@
       const lines = message.split('\n');
       for (let i = 0; i < lines.length; i++) {
         if (i > 0) {
-          // Insert line break via Shift+Enter
           input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true }));
           input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', shiftKey: true, bubbles: true }));
           document.execCommand('insertLineBreak', false, null);
@@ -704,16 +758,47 @@
       await sleep(300);
     }
 
-    // Find and click Send button — it's a <button> with text "Send"
+    // Find and click Send button
     let sendBtn = null;
 
-    // Try specific selectors first
-    sendBtn = document.querySelector('button.msg-form__send-button:not([disabled])');
+    // Strategy 1: Send button inside the same form as the input
+    const parentForm = input.closest('form[id^="msg-form"], form[id*="msg"]');
+    if (parentForm) {
+      // Look for Send button inside this specific form
+      const formBtns = parentForm.querySelectorAll('button');
+      for (const btn of formBtns) {
+        if (btn.textContent.trim() === 'Send' && !btn.disabled) {
+          sendBtn = btn;
+          break;
+        }
+      }
+    }
+
+    // Strategy 2: Specific class-based selectors
+    if (!sendBtn) {
+      sendBtn = document.querySelector('button.msg-form__send-button:not([disabled])');
+    }
     if (!sendBtn) {
       sendBtn = document.querySelector('button[aria-label="Send"]:not([disabled])');
     }
 
-    // Fallback: find by text
+    // Strategy 3: Find by text content (broadest)
+    if (!sendBtn) {
+      const allBtns = document.querySelectorAll('button');
+      for (const btn of allBtns) {
+        if (btn.textContent.trim() === 'Send' && !btn.disabled) {
+          // Prefer buttons near the input (in the same overlay/form area)
+          const btnRect = btn.getBoundingClientRect();
+          const inputRect = input.getBoundingClientRect();
+          if (Math.abs(btnRect.bottom - inputRect.bottom) < 200) {
+            sendBtn = btn;
+            break;
+          }
+        }
+      }
+    }
+
+    // Strategy 4: Any Send button on the page
     if (!sendBtn) {
       const allBtns = document.querySelectorAll('button');
       for (const btn of allBtns) {
@@ -732,10 +817,11 @@
     await sleep(2000);
 
     // Verify: check if input was cleared (sign of successful send)
-    const inputAfter = document.querySelector('textarea[role="textbox"]') ||
-                       document.querySelector('div.msg-form__contenteditable');
+    const inputAfter = input.tagName === 'TEXTAREA' ? input : 
+                       (document.querySelector('textarea[role="textbox"]') ||
+                        document.querySelector('div.msg-form__contenteditable'));
     if (inputAfter) {
-      const remainingText = inputType === 'textarea' ? inputAfter.value : inputAfter.textContent;
+      const remainingText = inputAfter.tagName === 'TEXTAREA' ? inputAfter.value : inputAfter.textContent;
       if (!remainingText || remainingText.trim() === '') {
         return { success: true };
       }
