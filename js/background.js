@@ -1,8 +1,8 @@
 /**
- * Background Service Worker (v6) — Multi-Platform
+ * Background Service Worker (v10) — Multi-Platform
  *
  * THE ORCHESTRATOR — drives all navigation and content-script injection.
- * Now supports both Instagram and Threads.
+ * Supports Instagram, Threads, LinkedIn, and X (Twitter).
  *
  * Two modes:
  *   1. Bulk Outreach (primary) — handle list, follow/DM, waitlist, cadence
@@ -11,7 +11,8 @@
  * Platform routing:
  *   - Instagram: instagram.com profiles, DMs via Message button
  *   - Threads: threads.net profiles for follow, but DMs redirect to Instagram
- *     (Threads web DMs not yet available)
+ *   - LinkedIn: linkedin.com/in/ profiles, Connect + Message, connection note as DM
+ *   - X (Twitter): x.com profiles, Follow + DM, tweet reply fallback for closed DMs
  */
 
 // ─── State: Keyword Scan ───
@@ -106,28 +107,56 @@ let cadenceTimerId = null;
 
 // ─── Platform helpers ───
 function profileUrl(username, platform) {
-  if (platform === 'threads') return `https://www.threads.net/@${username}`;
-  return `https://www.instagram.com/${username}/`;
+  switch (platform) {
+    case 'threads': return `https://www.threads.net/@${username}`;
+    case 'linkedin': return `https://www.linkedin.com/in/${username}/`;
+    case 'x': return `https://x.com/${username}`;
+    default: return `https://www.instagram.com/${username}/`;
+  }
 }
 
 function platformBaseUrl(platform) {
-  if (platform === 'threads') return 'https://www.threads.net/';
-  return 'https://www.instagram.com/';
+  switch (platform) {
+    case 'threads': return 'https://www.threads.net/';
+    case 'linkedin': return 'https://www.linkedin.com/';
+    case 'x': return 'https://x.com/';
+    default: return 'https://www.instagram.com/';
+  }
 }
 
 function platformTabQuery(platform) {
-  if (platform === 'threads') return 'https://www.threads.net/*';
-  return 'https://www.instagram.com/*';
+  switch (platform) {
+    case 'threads': return 'https://www.threads.net/*';
+    case 'linkedin': return 'https://www.linkedin.com/*';
+    case 'x': return 'https://x.com/*';
+    default: return 'https://www.instagram.com/*';
+  }
 }
 
 function contentScriptFile(platform) {
-  if (platform === 'threads') return 'js/threads-content.js';
-  return 'js/content.js';
+  switch (platform) {
+    case 'threads': return 'js/threads-content.js';
+    case 'linkedin': return 'js/linkedin-content.js';
+    case 'x': return 'js/x-content.js';
+    default: return 'js/content.js';
+  }
 }
 
-// For DMs, always use Instagram (Threads has no web DMs)
-function dmProfileUrl(username) {
-  return `https://www.instagram.com/${username}/`;
+// For DMs: each platform uses its own messaging except Threads (redirects to Instagram)
+function dmProfileUrl(username, platform) {
+  switch (platform) {
+    case 'linkedin': return `https://www.linkedin.com/in/${username}/`;
+    case 'x': return `https://x.com/${username}`;
+    default: return `https://www.instagram.com/${username}/`;
+  }
+}
+
+// Platform-specific "connect" action name
+function connectActionName(platform) {
+  switch (platform) {
+    case 'linkedin': return 'clickConnectButton';
+    default: return 'clickFollowButton';
+  }
 }
 
 // ─── Open side panel when extension icon is clicked ───
@@ -182,6 +211,8 @@ const handlers = {
     // Detect platform from URL if not explicitly set
     if (msg.postUrl.includes('threads.net')) state.platform = 'threads';
     else if (msg.postUrl.includes('instagram.com')) state.platform = 'instagram';
+    else if (msg.postUrl.includes('linkedin.com')) state.platform = 'linkedin';
+    else if (msg.postUrl.includes('x.com') || msg.postUrl.includes('twitter.com')) state.platform = 'x';
 
     const tab = await getOrCreateTab(msg.postUrl, state.platform);
     state.tabId = tab.id;
@@ -342,17 +373,44 @@ async function runDMLoop() {
         continue;
       }
 
-      // Always navigate to Instagram profile for DMs (even if scan was on Threads)
+      // Navigate to profile for DMs on the appropriate platform
+      const dmPlatform = (state.platform === 'threads') ? 'instagram' : state.platform;
       state.currentDMStep = 'navigating';
       broadcastDMProgress(user.username, 'navigating', `Opening @${user.username}'s profile...`);
-      await chrome.tabs.update(state.tabId, { url: dmProfileUrl(user.username) });
+      await chrome.tabs.update(state.tabId, { url: dmProfileUrl(user.username, dmPlatform) });
       await waitForTabLoad(state.tabId);
       await delay(3000);
 
       state.currentDMStep = 'clickingMessage';
       broadcastDMProgress(user.username, 'clickingMessage', 'Finding and clicking "Message" button...');
-      await injectContentScript(state.tabId, 'instagram'); // Always Instagram for DMs
+      await injectContentScript(state.tabId, dmPlatform);
       await delay(500);
+
+      // X-specific: check DM availability first, fallback to reply
+      if (dmPlatform === 'x') {
+        const dmAvail = await sendToTab(state.tabId, { action: 'checkDMAvailability' });
+        if (dmAvail && !dmAvail.canDM) {
+          // DMs closed — use tweet reply as fallback
+          state.currentDMStep = 'replying';
+          broadcastDMProgress(user.username, 'replying', 'DMs closed — sending tweet reply instead...');
+          // Navigate to user's latest tweet or use their profile for reply
+          const replyResult = await sendToTab(state.tabId, { action: 'typeAndSendReply', message: personalizedMsg });
+          if (replyResult && replyResult.error) throw new Error(replyResult.error);
+          state.currentDMStep = 'done';
+          broadcastDMProgress(user.username, 'done', 'Reply sent (DMs closed)!');
+          const logEntry = { username: user.username, status: 'replied', message: 'Tweet reply sent (DMs closed)', timestamp: Date.now(), viewed: true, followed: false, platform: state.platform };
+          state.sentLog.push(logEntry);
+          await saveDMHistory(logEntry);
+          state.currentIndex++;
+          if (state.status === 'sending' && state.currentIndex < state.selectedUsers.length) {
+            broadcastDMProgress('', 'waiting', `Waiting ${state.delaySeconds}s before next DM...`);
+            await delay(state.delaySeconds * 1000, true, () => state.status !== 'sending');
+          }
+          continue;
+        }
+      }
+
+      // LinkedIn-specific: use Connect if no Message button
       const clickResult = await sendToTab(state.tabId, { action: 'clickMessageButton' });
 
       if (clickResult && clickResult.error && clickResult.noMessage) {
@@ -382,7 +440,7 @@ async function runDMLoop() {
       state.currentDMStep = 'waitingDM';
       broadcastDMProgress(user.username, 'waitingDM', 'Waiting for DM conversation to open...');
       await delay(3000);
-      await injectContentScript(state.tabId, 'instagram');
+      await injectContentScript(state.tabId, dmPlatform);
       await delay(1000);
 
       state.currentDMStep = 'typing';
@@ -493,10 +551,39 @@ async function runBulkOutreachLoop() {
           await delay(1500);
         }
 
-        // For Threads: redirect to Instagram for DM since Threads has no web DMs
+        // X-specific: even if Message button is visible, verify DM is actually open
+        if (platform === 'x') {
+          const dmAvailCheck = await sendToTab(boState.tabId, { action: 'checkDMAvailability' });
+          if (dmAvailCheck && !dmAvailCheck.canDM) {
+            // DMs closed despite button presence — use tweet reply fallback
+            broadcastBOProgress(user.username, 'replying', 'DMs closed — sending tweet reply instead...');
+            const replyResult = await sendToTab(boState.tabId, { action: 'typeAndSendReply', message: personalizedMsg });
+            if (replyResult && replyResult.error) throw new Error(replyResult.error);
+            const doneMsg = didFollow ? 'Followed & reply sent (DMs closed)!' : 'Reply sent (DMs closed)!';
+            broadcastBOProgress(user.username, 'done', doneMsg);
+            boState.sentLog.push({ username: user.username, status: 'success', message: doneMsg, timestamp: Date.now() });
+            await saveDMHistory({
+              username: user.username, status: 'replied',
+              message: `${didFollow ? 'Followed & ' : ''}Reply sent (DMs closed) (${user.templateName})`,
+              templateName: user.templateName, timestamp: Date.now(), viewed: true, followed: didFollow, platform
+            });
+            if (boState.cadenceConfig && boState.cadenceConfig.intervals && boState.cadenceConfig.intervals.length > 0) {
+              await scheduleCadenceFollowUps(user, boState.cadenceConfig);
+            }
+            boState.currentIndex++;
+            if (boState.status === 'sending' && boState.currentIndex < boState.outreachList.length) {
+              broadcastBOProgress('', 'waiting', `Waiting ${boState.delaySeconds}s before next user...`);
+              await delay(boState.delaySeconds * 1000, true, () => boState.status !== 'sending');
+            }
+            continue;
+          }
+        }
+
+        // Platform-specific DM routing
+        const dmPlatformBO = (platform === 'threads') ? 'instagram' : platform;
         if (platform === 'threads') {
           broadcastBOProgress(user.username, 'dm-direct', 'Message available — redirecting to Instagram for DM...');
-          await chrome.tabs.update(boState.tabId, { url: dmProfileUrl(user.username) });
+          await chrome.tabs.update(boState.tabId, { url: dmProfileUrl(user.username, 'instagram') });
           await waitForTabLoad(boState.tabId);
           await delay(3000);
           await injectContentScript(boState.tabId, 'instagram');
@@ -510,7 +597,7 @@ async function runBulkOutreachLoop() {
         }
 
         await delay(3000);
-        await injectContentScript(boState.tabId, 'instagram'); // DM always on Instagram
+        await injectContentScript(boState.tabId, dmPlatformBO);
         await delay(1000);
 
         broadcastBOProgress(user.username, 'typing', 'Typing message...');
@@ -577,10 +664,16 @@ async function runBulkOutreachLoop() {
         // Do NOT record as health failure — this is expected behavior
 
       } else {
-        // ── No Message button — need to Follow first ──
-        broadcastBOProgress(user.username, 'following', 'No Message button — following...');
+        // ── No Message button — need to Follow/Connect first ──
+        const connectAction = connectActionName(platform);
+        const actionLabel = platform === 'linkedin' ? 'Connecting' : 'Following';
+        broadcastBOProgress(user.username, 'following', `No Message button — ${actionLabel.toLowerCase()}...`);
 
-        const followResult = await sendToTab(boState.tabId, { action: 'clickFollowButton' });
+        // For LinkedIn: send connection request with note (the DM message as connection note)
+        const connectPayload = platform === 'linkedin'
+          ? { action: connectAction, note: personalizedMsg }
+          : { action: connectAction };
+        const followResult = await sendToTab(boState.tabId, connectPayload);
 
         // Handle follow button errors gracefully (private profile edge cases)
         if (followResult && followResult.error) {
@@ -612,10 +705,11 @@ async function runBulkOutreachLoop() {
         const followStatus = followResult?.status || 'unknown';
         const alreadyFollowing = followResult?.alreadyFollowing || false;
 
-        if (followStatus === 'Requested') {
-          // ── Private account, needs approval ──
+        if (followStatus === 'Requested' || followStatus === 'Pending') {
+          // ── Private account or pending connection ──
+          const actionWord = platform === 'linkedin' ? 'Connection' : 'Follow';
           if (settings.waitlistPrivate) {
-            // Setting: Waitlist private accounts
+            // Setting: Waitlist private/pending accounts
             await saveToWaitlist({
               username: user.username,
               templateId: user.templateId,
@@ -627,7 +721,7 @@ async function runBulkOutreachLoop() {
               platform
             });
 
-            const statusMsg = `Follow requested @${user.username} — added to waitlist (pending approval)`;
+            const statusMsg = `${actionWord} requested @${user.username} — added to waitlist (pending approval)`;
             broadcastBOProgress(user.username, 'waitlisted', statusMsg);
             boState.sentLog.push({ username: user.username, status: 'waitlisted', message: statusMsg, timestamp: Date.now() });
 
@@ -663,10 +757,11 @@ async function runBulkOutreachLoop() {
           // ── Following (public) or already following → DM immediately (setting enabled) ──
           broadcastBOProgress(user.username, 'checking', `Followed @${user.username} — checking for Message button...`);
 
-          // For Threads: after follow, redirect to Instagram for DM
+          // Platform-specific DM routing after follow
+          const dmPlatAfterFollow = (platform === 'threads') ? 'instagram' : platform;
           if (platform === 'threads') {
             broadcastBOProgress(user.username, 'dm-direct', 'Followed on Threads — redirecting to Instagram for DM...');
-            await chrome.tabs.update(boState.tabId, { url: dmProfileUrl(user.username) });
+            await chrome.tabs.update(boState.tabId, { url: dmProfileUrl(user.username, 'instagram') });
             await waitForTabLoad(boState.tabId);
             await delay(3000);
             await injectContentScript(boState.tabId, 'instagram');
@@ -686,8 +781,33 @@ async function runBulkOutreachLoop() {
             if (clickResult && clickResult.error) throw new Error(clickResult.error);
 
             await delay(3000);
-            await injectContentScript(boState.tabId, 'instagram');
+            await injectContentScript(boState.tabId, dmPlatAfterFollow);
             await delay(1000);
+
+            // X-specific: if DMs closed after following, try tweet reply
+            if (platform === 'x') {
+              const dmAvailAfterFollow = await sendToTab(boState.tabId, { action: 'checkDMAvailability' });
+              if (dmAvailAfterFollow && !dmAvailAfterFollow.canDM) {
+                broadcastBOProgress(user.username, 'replying', 'DMs closed — sending tweet reply instead...');
+                const replyResult = await sendToTab(boState.tabId, { action: 'typeAndSendReply', message: personalizedMsg });
+                if (replyResult && replyResult.error) throw new Error(replyResult.error);
+                broadcastBOProgress(user.username, 'done', 'Followed & reply sent (DMs closed)!');
+                boState.sentLog.push({ username: user.username, status: 'success', message: 'Followed & reply sent (DMs closed)', timestamp: Date.now() });
+                await saveDMHistory({
+                  username: user.username, status: 'replied', message: `Followed & reply sent (DMs closed) (${user.templateName})`,
+                  templateName: user.templateName, timestamp: Date.now(), viewed: true, followed: true, platform
+                });
+                if (boState.cadenceConfig && boState.cadenceConfig.intervals && boState.cadenceConfig.intervals.length > 0) {
+                  await scheduleCadenceFollowUps(user, boState.cadenceConfig);
+                }
+                boState.currentIndex++;
+                if (boState.status === 'sending' && boState.currentIndex < boState.outreachList.length) {
+                  broadcastBOProgress('', 'waiting', `Waiting ${boState.delaySeconds}s before next user...`);
+                  await delay(boState.delaySeconds * 1000, true, () => boState.status !== 'sending');
+                }
+                continue;
+              }
+            }
 
             broadcastBOProgress(user.username, 'typing', 'Typing message...');
             const typeResult = await sendToTab(boState.tabId, { action: 'typeAndSendDM', message: personalizedMsg });

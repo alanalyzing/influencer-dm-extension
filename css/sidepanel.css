@@ -49,6 +49,16 @@ body.platform-threads .header {
   background: linear-gradient(135deg, #000000, #333333, #000000);
 }
 
+/* LinkedIn gradient override */
+body.platform-linkedin .header {
+  background: linear-gradient(135deg, #0a66c2, #004182, #0a66c2);
+}
+
+/* X gradient override */
+body.platform-x .header {
+  background: linear-gradient(135deg, #000000, #1d1d1d, #000000);
+}
+
 /* ═══ Platform Selector ═══ */
 .platform-selector {
   display: flex;
@@ -79,11 +89,14 @@ body.platform-threads .header {
 
 .platform-btn:first-child {
   border-radius: var(--radius-sm) 0 0 var(--radius-sm);
-  border-right: none;
 }
 
 .platform-btn:last-child {
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.platform-btn:not(:first-child) {
+  border-left: none;
 }
 
 .platform-btn.active[data-platform="instagram"] {
@@ -93,6 +106,18 @@ body.platform-threads .header {
 }
 
 .platform-btn.active[data-platform="threads"] {
+  background: #000;
+  color: #fff;
+  border-color: transparent;
+}
+
+.platform-btn.active[data-platform="linkedin"] {
+  background: #0a66c2;
+  color: #fff;
+  border-color: transparent;
+}
+
+.platform-btn.active[data-platform="x"] {
   background: #000;
   color: #fff;
   border-color: transparent;

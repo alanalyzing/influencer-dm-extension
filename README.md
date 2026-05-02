@@ -1,6 +1,39 @@
 # Influencer DM Manager — Chrome Extension
 
-> Automate Instagram & Threads influencer engagement: keyword-based comment scanning, bulk outreach with smart follow/DM logic, templated messaging, cadence follow-ups, waitlist management, dashboard analytics, and CSV import/export. No AI, no API keys, 100% local browser automation.
+> Multi-platform influencer engagement manager for Instagram, Threads, LinkedIn, and X (Twitter). Bulk outreach, keyword scan, DM templates, connection/follow + DM logic, tweet reply fallback, waitlist, dashboard analytics, CSV import/export. No AI, no API keys, 100% local browser automation.
+
+---
+
+## What's New in v10
+
+### Multi-Platform: LinkedIn & X (Twitter) Support
+
+The extension now supports **4 platforms** from a single interface:
+
+| Platform | Outreach Flow | Keyword Scan | DM Method |
+|----------|--------------|--------------|------------|
+| Instagram | Follow + DM | Post comments | Direct Message |
+| Threads | Follow (DM via IG) | Post comments | Redirects to Instagram DM |
+| LinkedIn | Connect + Message (or connection note) | Post comments | LinkedIn Message overlay |
+| X (Twitter) | Follow + DM (or tweet reply fallback) | Tweet replies | DM or public reply |
+
+### LinkedIn Features
+- **Connect + Message**: Sends connection request with personalized note as the DM
+- **1st-degree detection**: If already connected, sends DM directly via Message button
+- **Pending state handling**: Detects "Pending" connections and waitlists them
+- **Profile restriction detection**: Identifies restricted/unavailable profiles
+
+### X (Twitter) Features
+- **Follow + DM**: Follows user, then sends DM if their DMs are open
+- **Tweet Reply Fallback**: If DMs are closed, automatically replies to their tweet instead
+- **DM availability check**: Detects whether user accepts DMs before attempting
+- **Protected account detection**: Identifies locked/protected accounts and skips them
+- **Keyword scan on tweet replies**: Scans replies to any tweet for keyword matches
+
+### UI Updates
+- 4-platform selector with branded colors (IG gradient, Threads black, LinkedIn blue, X black)
+- Platform-specific labels and placeholders for all input fields
+- Header gradient changes per platform
 
 ---
 

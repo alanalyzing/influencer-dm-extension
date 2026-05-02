@@ -1,5 +1,5 @@
 /**
- * Side Panel Controller (v7)
+ * Side Panel Controller (v10)
  *
  * Two modes:
  *   1. Bulk Outreach (primary) — handle list, templates, status lights, history, cadence
@@ -208,11 +208,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function updatePlatformLabels() {
-    const isThreads = currentPlatform === 'threads';
-    if (postUrlLabel) postUrlLabel.textContent = isThreads ? 'Threads Post URL' : 'Instagram Post URL';
-    if (postUrlInput) postUrlInput.placeholder = isThreads ? 'https://www.threads.net/@user/post/...' : 'https://www.instagram.com/p/...';
-    if (boHandlesLabel) boHandlesLabel.textContent = isThreads ? 'Threads Handles' : 'Instagram Handles';
-    if (boHandlesInput) boHandlesInput.placeholder = isThreads ? '@handle1\n@handle2\n@handle3' : '@handle1\n@handle2\n@handle3';
+    const labels = {
+      instagram: { postUrl: 'Instagram Post URL', postPlaceholder: 'https://www.instagram.com/p/...', handles: 'Instagram Handles', handlesPlaceholder: '@handle1\n@handle2\n@handle3' },
+      threads: { postUrl: 'Threads Post URL', postPlaceholder: 'https://www.threads.net/@user/post/...', handles: 'Threads Handles', handlesPlaceholder: '@handle1\n@handle2\n@handle3' },
+      linkedin: { postUrl: 'LinkedIn Post URL', postPlaceholder: 'https://www.linkedin.com/posts/...', handles: 'LinkedIn Usernames (from URL slug)', handlesPlaceholder: 'john-doe-123abc\njane-smith-456def\ncompany-ceo' },
+      x: { postUrl: 'X (Twitter) Post URL', postPlaceholder: 'https://x.com/user/status/...', handles: 'X Handles', handlesPlaceholder: '@handle1\n@handle2\n@handle3' }
+    };
+    const l = labels[currentPlatform] || labels.instagram;
+    if (postUrlLabel) postUrlLabel.textContent = l.postUrl;
+    if (postUrlInput) postUrlInput.placeholder = l.postPlaceholder;
+    if (boHandlesLabel) boHandlesLabel.textContent = l.handles;
+    if (boHandlesInput) boHandlesInput.placeholder = l.handlesPlaceholder;
   }
 
 
@@ -267,9 +273,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const dmTemplate = dmTemplateInput.value.trim();
     const delaySec = parseInt(delayInput.value) || 60;
 
-    const validUrl = currentPlatform === 'threads'
-      ? (postUrl.includes('threads.net/') || postUrl.includes('threads.com/'))
-      : postUrl.includes('instagram.com/');
+    const urlValidators = {
+      instagram: url => url.includes('instagram.com/'),
+      threads: url => url.includes('threads.net/') || url.includes('threads.com/'),
+      linkedin: url => url.includes('linkedin.com/'),
+      x: url => url.includes('x.com/') || url.includes('twitter.com/')
+    };
+    const validUrl = (urlValidators[currentPlatform] || urlValidators.instagram)(postUrl);
     if (!postUrl || !validUrl) return flash(postUrlInput);
     if (!keywords.length) return flash(keywordsInput);
     if (!dmTemplate) return flash(dmTemplateInput);

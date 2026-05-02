@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Influencer DM Manager",
-  "version": "9.0.0",
-  "description": "Instagram & Threads influencer engagement manager. Skip private profiles, deduplication, dashboard analytics, CSV import/export, bulk outreach, keyword-scan, DM templates, session health, cadence follow-ups, and waitlist.",
+  "version": "10.0.0",
+  "description": "Multi-platform influencer engagement manager for Instagram, Threads, LinkedIn, and X (Twitter). Bulk outreach, keyword scan, DM templates, connection/follow + DM logic, tweet reply fallback, waitlist, dashboard analytics, CSV import/export.",
   "permissions": [
     "activeTab",
     "storage",
@@ -13,7 +13,10 @@
   "host_permissions": [
     "https://www.instagram.com/*",
     "https://www.threads.net/*",
-    "https://www.threads.com/*"
+    "https://www.threads.com/*",
+    "https://www.linkedin.com/*",
+    "https://x.com/*",
+    "https://twitter.com/*"
   ],
   "action": {
     "default_icon": {
@@ -43,6 +46,18 @@
     {
       "matches": ["https://www.threads.net/*", "https://www.threads.com/*"],
       "js": ["js/threads-content.js"],
+      "css": ["css/overlay.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.linkedin.com/*"],
+      "js": ["js/linkedin-content.js"],
+      "css": ["css/overlay.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "js": ["js/x-content.js"],
       "css": ["css/overlay.css"],
       "run_at": "document_idle"
     }
