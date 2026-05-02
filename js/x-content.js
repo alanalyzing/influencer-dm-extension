@@ -5,7 +5,7 @@
  * v3 fixes: Bug #3 (execCommand for contenteditable), Bug #7 (reply from tweet page),
  *           Edge cases E4/E5, Improvements S4/S8.
  *
- * KEY DOM FINDINGS:
+ * KEY DOM FINDINGS (verified May 2026):
  *   - X uses data-testid attributes extensively — very reliable selectors
  *   - Follow button: button[data-testid$="-follow"] or button[aria-label^="Follow @"]
  *   - DM button on profile: button[aria-label="Message"] (NO data-testid!)
@@ -13,8 +13,12 @@
  *   - Tweet text: div[data-testid="tweetText"]
  *   - Reply input: div[data-testid="tweetTextarea_0"][role="textbox"] (contenteditable)
  *   - Reply send: button[data-testid="tweetButtonInline"]
- *   - DM compose input: div[data-testid="dmComposerTextInput"] (contenteditable)
- *   - DM send: button[data-testid="dmComposerSendButton"]
+ *   - DM compose input: textarea[data-testid="dm-composer-textarea"][placeholder="Message"]
+ *     (CHANGED from div[data-testid="dmComposerTextInput"] contenteditable)
+ *   - DM compose form: form[data-testid="dm-composer-form"]
+ *   - DM compose container: div[data-testid="dm-composer-container"]
+ *   - DM send: Enter key on textarea (no explicit send button in new UI)
+ *     (CHANGED from button[data-testid="dmComposerSendButton"])
  *   - User-Name: div[data-testid="User-Name"]
  *   - UserAvatar: div[data-testid="UserAvatar-Container-{username}"]
  *   - DM new chat: button[data-testid="dm-new-chat-button"]
@@ -367,32 +371,49 @@
     // Wait for DM compose to appear
     await sleep(2000);
 
-    // Find the DM input — data-testid="dmComposerTextInput" (verified)
+    // Find the DM input
+    // X DM DOM (verified May 2026):
+    //   textarea[data-testid="dm-composer-textarea"][placeholder="Message"]
+    //   inside form[data-testid="dm-composer-form"]
+    //   inside div[data-testid="dm-composer-container"]
+    //   NO contenteditable elements, NO role="textbox"
+    //   OLD selectors (pre-2026): div[data-testid="dmComposerTextInput"] contenteditable
     const inputSelectors = [
+      // Current X (May 2026) — textarea
+      'textarea[data-testid="dm-composer-textarea"]',
+      'form[data-testid="dm-composer-form"] textarea',
+      'div[data-testid="dm-composer-container"] textarea',
+      'textarea[placeholder="Message"]',
+      'textarea[placeholder="Start a new message"]',
+      // Legacy selectors (pre-2026) — contenteditable div
       'div[data-testid="dmComposerTextInput"]',
       'div[data-testid="dmComposerTextInput"] div[contenteditable="true"]',
       'div[data-testid="dmComposerTextInput"] div[role="textbox"]',
       'div[role="textbox"][data-testid="dmComposerTextInput"]',
-      // Fallback selectors
       'aside div[role="textbox"][contenteditable="true"]',
       'div[data-testid="DmScrollerContainer"] div[contenteditable="true"]'
     ];
 
     let input = null;
-    for (let attempt = 0; attempt < 20; attempt++) {
+    let isTextarea = false;
+    for (let attempt = 0; attempt < 25; attempt++) {
       for (const sel of inputSelectors) {
         const el = document.querySelector(sel);
-        if (el) {
-          // If the element itself is contenteditable, use it
-          if (el.getAttribute('contenteditable') === 'true' || el.getAttribute('role') === 'textbox') {
+        if (el && (el.offsetParent !== null || el.offsetWidth > 0)) {
+          if (el.tagName === 'TEXTAREA') {
+            input = el;
+            isTextarea = true;
+            break;
+          } else if (el.getAttribute('contenteditable') === 'true' || el.getAttribute('role') === 'textbox') {
             input = el;
             break;
-          }
-          // Otherwise look for a contenteditable child
-          const child = el.querySelector('[contenteditable="true"], [role="textbox"]');
-          if (child) {
-            input = child;
-            break;
+          } else {
+            // Look for a contenteditable child
+            const child = el.querySelector('[contenteditable="true"], [role="textbox"]');
+            if (child) {
+              input = child;
+              break;
+            }
           }
         }
       }
@@ -404,47 +425,84 @@
       return { error: 'Could not find DM input on X' };
     }
 
-    // BUG FIX #3: Use execCommand for contenteditable React compatibility
     input.focus();
     await sleep(300);
 
-    // Clear existing content using execCommand (not textContent = '')
-    document.execCommand('selectAll', false, null);
-    document.execCommand('delete', false, null);
-    await sleep(100);
+    if (isTextarea) {
+      // Modern X (May 2026): textarea — use native value setter for React compatibility
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype, 'value'
+      ).set;
+      nativeSetter.call(input, message);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      await sleep(300);
 
-    // Type message using execCommand for contenteditable compatibility
-    const lines = message.split('\n');
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i]) {
-        document.execCommand('insertText', false, lines[i]);
+      // Double-check: if value didn't stick, try execCommand
+      if (input.value !== message) {
+        input.focus();
+        input.select();
+        document.execCommand('insertText', false, message);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
       }
-      if (i < lines.length - 1) {
-        // Shift+Enter for line break within DM
-        document.execCommand('insertLineBreak', false, null);
+    } else {
+      // Legacy X: contenteditable div — use execCommand
+      document.execCommand('selectAll', false, null);
+      document.execCommand('delete', false, null);
+      await sleep(100);
+
+      const lines = message.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i]) {
+          document.execCommand('insertText', false, lines[i]);
+        }
+        if (i < lines.length - 1) {
+          document.execCommand('insertLineBreak', false, null);
+        }
+        await sleep(50);
       }
-      await sleep(50);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
-    input.dispatchEvent(new Event('input', { bubbles: true }));
     await sleep(500);
 
-    // Find and click Send button — data-testid="dmComposerSendButton" (verified)
-    let sendBtn = document.querySelector('button[data-testid="dmComposerSendButton"]');
-    if (!sendBtn) {
-      sendBtn = document.querySelector('button[aria-label="Send"]');
+    // Find and click Send button
+    // Modern X (May 2026): form submit via Enter key or submit button within form
+    // Legacy X: button[data-testid="dmComposerSendButton"]
+    let sendBtn = null;
+    const SEND_SELECTORS = [
+      'button[data-testid="dmComposerSendButton"]',
+      'form[data-testid="dm-composer-form"] button[type="submit"]',
+      'div[data-testid="dm-composer-container"] button[type="submit"]',
+      'button[aria-label="Send"]',
+      'button[aria-label="send"]'
+    ];
+    for (const sel of SEND_SELECTORS) {
+      const btn = document.querySelector(sel);
+      if (btn) { sendBtn = btn; break; }
     }
 
-    if (!sendBtn) {
-      return { error: 'Send button not found in X DM' };
+    if (sendBtn) {
+      sendBtn.click();
+    } else {
+      // No explicit send button — submit via Enter key on the textarea/form
+      const form = input.closest('form');
+      if (form) {
+        // Dispatch Enter keydown on the input to trigger form submission
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+        await sleep(100);
+        input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      } else {
+        return { error: 'Send button not found in X DM and no form to submit' };
+      }
     }
 
-    sendBtn.click();
     await sleep(2000);
 
     // Verify: check if input was cleared
-    const inputAfter = document.querySelector('div[data-testid="dmComposerTextInput"]') || input;
-    const afterText = inputAfter.textContent || inputAfter.innerText || '';
+    const inputAfter = document.querySelector('textarea[data-testid="dm-composer-textarea"]') ||
+                       document.querySelector('div[data-testid="dmComposerTextInput"]') || input;
+    const afterText = isTextarea ? (inputAfter.value || '') : (inputAfter.textContent || inputAfter.innerText || '');
     if (afterText.trim() === '') {
       return { success: true };
     }

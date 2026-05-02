@@ -4,6 +4,21 @@
 
 ---
 
+## What's New in v11.5
+
+### X (Twitter) DM Fix: "Could not find DM input on X"
+
+**Root cause:** X changed their DM compose UI from a `contenteditable` div (`data-testid="dmComposerTextInput"`) to a native `<textarea>` (`data-testid="dm-composer-textarea"` with `placeholder="Message"`). The old send button (`data-testid="dmComposerSendButton"`) was also removed in favor of Enter key submission.
+
+**Fix:** Rewrote `handleTypeAndSendDM` in `x-content.js` with:
+- **Textarea-first selectors** (5 modern + 6 legacy fallbacks)
+- **Native value setter** for React-controlled textarea (same technique as LinkedIn fix)
+- **Enter key submission** when no explicit Send button exists
+- **Legacy contenteditable support** preserved as fallback
+- **Visibility check** (`offsetParent !== null`) to skip hidden elements
+
+---
+
 ## What's New in v11.4
 
 ### LinkedIn DM: Same-Name Disambiguation + Robust Name Extraction
