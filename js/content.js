@@ -428,7 +428,7 @@
 
   async function handleTypeAndSendDM(message) {
     // Find the message input — wait up to 15 seconds
-    const input = await findMessageInput(15000);
+    let input = await findMessageInput(15000);
     if (!input) {
       return { error: 'Could not find message input box' };
     }
@@ -436,17 +436,26 @@
     // Count existing message bubbles before sending (for post-send verification)
     const bubbleCountBefore = countMessageBubbles();
 
-    // Attempt up to 2 tries to type and send
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    // Attempt up to 4 tries to type and send (each attempt uses progressively more
+    // aggressive strategies inside typeIntoInput)
+    for (let attempt = 1; attempt <= 4; attempt++) {
       // Type the message
       await typeIntoInput(input, message);
-      await sleep(1000);
+      await sleep(1200);
 
       // Verify text was actually entered
-      const typed = input.textContent || input.innerText || input.value || '';
+      const typed = getInputText(input);
       if (typed.trim().length === 0) {
-        if (attempt === 2) return { error: 'Failed to type message into input (text not registered)' };
-        await sleep(1000);
+        if (attempt === 4) return { error: 'Failed to type message into input (text not registered after 4 attempts)' };
+        console.log(`[DM Extension] Type attempt ${attempt} failed, retrying...`);
+        // Wait longer between retries to let React settle
+        await sleep(1500 + attempt * 500);
+        // Re-find the input in case DOM was replaced (React re-renders)
+        const freshInput = await findMessageInput(3000);
+        if (freshInput && freshInput !== input) {
+          console.log('[DM Extension] Input element changed, using fresh reference');
+          input = freshInput;
+        }
         continue;
       }
 
@@ -455,17 +464,17 @@
       await sleep(2000);
 
       // VERIFICATION LAYER 1: Check input is empty (text was consumed)
-      const remaining = input.textContent || input.innerText || input.value || '';
+      const remaining = getInputText(input);
       if (remaining.trim().length > 0) {
         // Text still in input — send didn't fire
-        if (attempt === 2) {
+        if (attempt === 4) {
           // Last resort: try one more Enter key press
           input.dispatchEvent(new KeyboardEvent('keydown', {
             key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
             shiftKey: false, bubbles: true, cancelable: true
           }));
           await sleep(1500);
-          const finalCheck = input.textContent || input.innerText || input.value || '';
+          const finalCheck = getInputText(input);
           if (finalCheck.trim().length > 0) {
             return { error: 'Message typed but Send button did not respond', sendFailed: true };
           }
@@ -568,101 +577,130 @@
   }
 
   async function typeIntoInput(input, message) {
+    // Strategy 1: execCommand (best for contenteditable React inputs)
     input.focus();
-    await sleep(300);
+    await sleep(400);
 
     if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
-      const setter =
-        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set ||
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      // Native textarea/input — use native value setter
+      const proto = input.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
       if (setter) setter.call(input, message);
       else input.value = message;
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.dispatchEvent(new Event('change', { bubbles: true }));
     } else {
-      // contenteditable / div[role="textbox"]
-      // Clear existing content
-      input.focus();
-      input.innerHTML = '';
-      input.textContent = '';
-      await sleep(200);
-
-      // Split message by line breaks and insert each line with Shift+Enter between them
-      const lines = message.split(/\n/);
-
-      for (let i = 0; i < lines.length; i++) {
-        if (lines[i].length > 0) {
-          // Use execCommand to insert text — this triggers React's synthetic event system
-          document.execCommand('insertText', false, lines[i]);
-          await sleep(50);
-        }
-
-        // Insert line break between lines (not after the last line)
-        if (i < lines.length - 1) {
-          // Simulate Shift+Enter to create a line break in Instagram's input
-          input.dispatchEvent(new KeyboardEvent('keydown', {
-            key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-            shiftKey: true, bubbles: true, cancelable: true
-          }));
-          // Also try inserting a <br> via execCommand as fallback
-          document.execCommand('insertLineBreak');
-          await sleep(50);
-        }
-      }
-
-      // Dispatch input event to ensure React picks up the change
-      input.dispatchEvent(new InputEvent('input', {
-        bubbles: true,
-        cancelable: true,
-        inputType: 'insertText',
-        data: null
-      }));
+      // contenteditable / div[role="textbox"] — this is the Instagram DM input
+      await typeContentEditable(input, message);
     }
 
-    // Wait and verify text was inserted
+    // Verify text was inserted
+    await sleep(600);
+    if (getInputText(input).trim().length > 0) return; // Success
+
+    // Strategy 2: Re-focus + click + execCommand (handles focus-steal issues)
+    console.log('[DM Extension] Strategy 1 failed, trying Strategy 2: re-focus + execCommand');
+    input.click();
     await sleep(500);
-    const content = input.textContent || input.innerText || input.value || '';
-    if (content.trim().length === 0) {
-      // Retry with clipboard paste approach
-      await retryWithClipboard(input, message);
+    input.focus();
+    await sleep(300);
+    if (input.tagName !== 'TEXTAREA' && input.tagName !== 'INPUT') {
+      await typeContentEditable(input, message);
     }
+    await sleep(600);
+    if (getInputText(input).trim().length > 0) return; // Success
+
+    // Strategy 3: DataTransfer paste event (bypasses execCommand restrictions)
+    console.log('[DM Extension] Strategy 2 failed, trying Strategy 3: DataTransfer paste');
+    input.focus();
+    await sleep(300);
+    try {
+      const dt = new DataTransfer();
+      dt.setData('text/plain', message);
+      const pasteEvent = new ClipboardEvent('paste', {
+        clipboardData: dt,
+        bubbles: true,
+        cancelable: true
+      });
+      input.dispatchEvent(pasteEvent);
+      await sleep(600);
+      if (getInputText(input).trim().length > 0) return; // Success
+    } catch (e) {
+      console.log('[DM Extension] DataTransfer paste failed:', e.message);
+    }
+
+    // Strategy 4: InputEvent with data (simulates actual user typing at event level)
+    console.log('[DM Extension] Strategy 3 failed, trying Strategy 4: InputEvent with data');
+    input.focus();
+    await sleep(300);
+    // Clear first
+    input.innerHTML = '';
+    await sleep(100);
+    // Fire beforeinput + input events with the full text
+    input.dispatchEvent(new InputEvent('beforeinput', {
+      bubbles: true, cancelable: true, inputType: 'insertText', data: message
+    }));
+    input.dispatchEvent(new InputEvent('input', {
+      bubbles: true, cancelable: true, inputType: 'insertText', data: message
+    }));
+    await sleep(600);
+    if (getInputText(input).trim().length > 0) return; // Success
+
+    // Strategy 5: innerHTML + synthetic events (last resort)
+    console.log('[DM Extension] Strategy 4 failed, trying Strategy 5: innerHTML + events');
+    input.focus();
+    await sleep(200);
+    const htmlContent = message
+      .split('\n')
+      .map(line => `<span data-text="true">${line || '\u200B'}</span>`)
+      .join('<br>');
+    input.innerHTML = htmlContent;
+    // Fire a comprehensive set of events to trigger React reconciliation
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    input.dispatchEvent(new InputEvent('input', {
+      bubbles: true, cancelable: true, inputType: 'insertText', data: message
+    }));
+    await sleep(400);
   }
 
-  async function retryWithClipboard(input, message) {
-    // Fallback: use clipboard API to paste the message
-    input.focus();
+  // Helper: type into contenteditable using execCommand
+  async function typeContentEditable(input, message) {
+    // Clear existing content
     input.innerHTML = '';
+    input.textContent = '';
     await sleep(200);
 
-    try {
-      // Convert line breaks to actual line breaks for clipboard
-      const clipText = message;
-      await navigator.clipboard.writeText(clipText);
-      // Simulate Ctrl+V / Cmd+V paste
-      document.execCommand('paste');
-      await sleep(300);
-
-      // If paste didn't work, try DataTransfer approach
-      const content = input.textContent || input.innerText || '';
-      if (content.trim().length === 0) {
-        const dt = new DataTransfer();
-        dt.setData('text/plain', message);
-        input.dispatchEvent(new ClipboardEvent('paste', {
-          clipboardData: dt,
-          bubbles: true,
-          cancelable: true
-        }));
-        await sleep(300);
+    // Split message by line breaks and insert each line
+    const lines = message.split(/\n/);
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].length > 0) {
+        document.execCommand('insertText', false, lines[i]);
+        await sleep(50);
       }
-    } catch (e) {
-      // Final fallback: set innerHTML directly with <br> for line breaks
-      const htmlContent = message
-        .split('\n')
-        .map(line => `<span>${line || '<br>'}</span>`)
-        .join('<br>');
-      input.innerHTML = htmlContent;
-      input.dispatchEvent(new Event('input', { bubbles: true }));
+      if (i < lines.length - 1) {
+        // Shift+Enter for line break
+        input.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+          shiftKey: true, bubbles: true, cancelable: true
+        }));
+        document.execCommand('insertLineBreak');
+        await sleep(50);
+      }
     }
+
+    // Dispatch input event to ensure React picks up the change
+    input.dispatchEvent(new InputEvent('input', {
+      bubbles: true, cancelable: true, inputType: 'insertText', data: null
+    }));
+  }
+
+  // Helper: get text content from any input type
+  function getInputText(input) {
+    if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
+      return input.value || '';
+    }
+    return input.textContent || input.innerText || '';
   }
 
   async function sendMessage(input) {
