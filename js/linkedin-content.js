@@ -719,44 +719,79 @@
       };
     }
 
-    // Focus the input
-    input.focus();
-    await sleep(300);
+    // BULLETPROOF TYPING: Retry up to 6 times with escalating strategies
+    const MAX_TYPE_ATTEMPTS = 6;
+    for (let typeAttempt = 1; typeAttempt <= MAX_TYPE_ATTEMPTS; typeAttempt++) {
+      input.focus();
+      await sleep(400);
 
-    if (inputType === 'textarea') {
-      // Use native setter for Ember/React-controlled textarea
-      typeIntoTextarea(input, message);
-      await sleep(500);
+      if (inputType === 'textarea') {
+        // Use native setter for Ember/React-controlled textarea
+        typeIntoTextarea(input, message);
+        await sleep(500);
 
-      // Double-check: if value didn't stick, try execCommand approach
-      if (input.value !== message) {
+        // Double-check: if value didn't stick, try execCommand approach
+        if (!input.value || input.value.trim() !== message.trim()) {
+          input.focus();
+          document.execCommand('selectAll', false, null);
+          document.execCommand('delete', false, null);
+          document.execCommand('insertText', false, message);
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          await sleep(300);
+        }
+      } else {
+        // Use execCommand for contenteditable (React/Ember compatibility)
         input.focus();
         document.execCommand('selectAll', false, null);
         document.execCommand('delete', false, null);
-        document.execCommand('insertText', false, message);
+        await sleep(100);
+
+        // Type message with line breaks using Shift+Enter simulation
+        const lines = message.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+          if (i > 0) {
+            input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true }));
+            input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', shiftKey: true, bubbles: true }));
+            document.execCommand('insertLineBreak', false, null);
+          }
+          if (lines[i]) {
+            document.execCommand('insertText', false, lines[i]);
+          }
+        }
         input.dispatchEvent(new Event('input', { bubbles: true }));
         await sleep(300);
       }
-    } else {
-      // Use execCommand for contenteditable (React/Ember compatibility)
-      input.focus();
-      document.execCommand('selectAll', false, null);
-      document.execCommand('delete', false, null);
-      await sleep(100);
 
-      // Type message with line breaks using Shift+Enter simulation
-      const lines = message.split('\n');
-      for (let i = 0; i < lines.length; i++) {
-        if (i > 0) {
-          input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true }));
-          input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', shiftKey: true, bubbles: true }));
-          document.execCommand('insertLineBreak', false, null);
-        }
-        if (lines[i]) {
-          document.execCommand('insertText', false, lines[i]);
-        }
+      // Verify text was inserted
+      await sleep(500);
+      const currentText = inputType === 'textarea' 
+        ? (input.value || '') 
+        : (input.textContent || input.innerText || '');
+      if (currentText.trim().length > 0) {
+        console.log(`[DM Extension LinkedIn] Text inserted on attempt ${typeAttempt}`);
+        break; // Success!
       }
-      input.dispatchEvent(new Event('input', { bubbles: true }));
+
+      console.log(`[DM Extension LinkedIn] Type attempt ${typeAttempt}/${MAX_TYPE_ATTEMPTS} failed`);
+      if (typeAttempt === MAX_TYPE_ATTEMPTS) {
+        // LAST RESORT: Force text and proceed anyway
+        console.log('[DM Extension LinkedIn] Forcing text via direct assignment');
+        if (inputType === 'textarea') {
+          input.value = message;
+        } else {
+          input.innerHTML = `<span>${message.replace(/\n/g, '<br>')}</span>`;
+        }
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        await sleep(500);
+        break; // Proceed to send regardless
+      }
+
+      // Wait before retry
+      await sleep(1500 + typeAttempt * 500);
+      input.click();
+      await sleep(300);
+      input.focus();
       await sleep(300);
     }
 

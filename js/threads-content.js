@@ -352,17 +352,61 @@
 
   async function handleTypeAndSendDM(message) {
     // Find the message input
-    const input = await findMessageInput(12000);
+    let input = await findMessageInput(15000);
     if (!input) {
       return { error: 'Could not find message input box' };
     }
 
-    await typeIntoInput(input, message);
-    await sleep(800);
+    // BULLETPROOF TYPING: Retry up to 6 times with escalating strategies
+    const MAX_TYPE_ATTEMPTS = 6;
+    for (let typeAttempt = 1; typeAttempt <= MAX_TYPE_ATTEMPTS; typeAttempt++) {
+      await typeIntoInput(input, message);
+      await sleep(800);
+
+      // Verify text was inserted
+      const currentText = getInputText(input);
+      if (currentText.trim().length > 0) {
+        console.log(`[DM Extension Threads] Text inserted on attempt ${typeAttempt}`);
+        break;
+      }
+
+      console.log(`[DM Extension Threads] Type attempt ${typeAttempt}/${MAX_TYPE_ATTEMPTS} failed`);
+      if (typeAttempt === MAX_TYPE_ATTEMPTS) {
+        // LAST RESORT: Force text and proceed anyway
+        console.log('[DM Extension Threads] Forcing text via direct assignment');
+        if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
+          input.value = message;
+        } else {
+          input.innerHTML = `<span>${message.replace(/\n/g, '<br>')}</span>`;
+        }
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        await sleep(500);
+        break; // Proceed to send regardless
+      }
+
+      // Wait before retry
+      await sleep(1500 + typeAttempt * 500);
+      // Re-find input in case DOM changed
+      const freshInput = await findMessageInput(3000);
+      if (freshInput && freshInput !== input) input = freshInput;
+      input.click();
+      await sleep(300);
+      input.focus();
+      await sleep(300);
+    }
+
     await sendMessage(input);
     await sleep(1500);
 
     return { success: true };
+  }
+
+  function getInputText(input) {
+    if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
+      return input.value || '';
+    }
+    return input.textContent || input.innerText || '';
   }
 
   async function findMessageInput(timeout) {
@@ -388,25 +432,41 @@
 
   async function typeIntoInput(input, message) {
     input.focus();
-    await sleep(200);
+    await sleep(300);
 
     if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
-      const setter =
-        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set ||
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      // Strategy 1: Native value setter
+      const proto = input.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
       if (setter) setter.call(input, message);
       else input.value = message;
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.dispatchEvent(new Event('change', { bubbles: true }));
     } else {
+      // Strategy 1: execCommand
       input.focus();
+      input.innerHTML = '';
       input.textContent = '';
       await sleep(100);
       document.execCommand('insertText', false, message);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      await sleep(300);
+
+      // If execCommand didn't work, try DataTransfer paste
+      if ((input.textContent || input.innerText || '').trim().length === 0) {
+        try {
+          const dt = new DataTransfer();
+          dt.setData('text/plain', message);
+          input.dispatchEvent(new ClipboardEvent('paste', {
+            clipboardData: dt, bubbles: true, cancelable: true
+          }));
+        } catch (e) { /* ignore */ }
+      }
     }
   }
 
   async function sendMessage(input) {
+    // Try Enter key first
     for (const eventType of ['keydown', 'keypress', 'keyup']) {
       input.dispatchEvent(new KeyboardEvent(eventType, {
         key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
@@ -415,6 +475,7 @@
     }
     await sleep(800);
 
+    // Also try clicking Send button
     for (const btn of document.querySelectorAll('button, div[role="button"]')) {
       const text = btn.textContent.trim().toLowerCase();
       if (text === 'send') { btn.click(); return; }

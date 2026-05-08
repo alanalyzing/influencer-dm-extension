@@ -425,43 +425,81 @@
       return { error: 'Could not find DM input on X' };
     }
 
-    input.focus();
-    await sleep(300);
+    // BULLETPROOF TYPING: Retry up to 6 times with escalating strategies
+    const MAX_TYPE_ATTEMPTS = 6;
+    for (let typeAttempt = 1; typeAttempt <= MAX_TYPE_ATTEMPTS; typeAttempt++) {
+      input.focus();
+      await sleep(400);
 
-    if (isTextarea) {
-      // Modern X (May 2026): textarea — use native value setter for React compatibility
-      const nativeSetter = Object.getOwnPropertyDescriptor(
-        HTMLTextAreaElement.prototype, 'value'
-      ).set;
-      nativeSetter.call(input, message);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      input.dispatchEvent(new Event('change', { bubbles: true }));
-      await sleep(300);
+      if (isTextarea) {
+        // Modern X (May 2026): textarea — use native value setter for React compatibility
+        const nativeSetter = Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype, 'value'
+        )?.set;
+        if (nativeSetter) nativeSetter.call(input, message);
+        else input.value = message;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        await sleep(400);
 
-      // Double-check: if value didn't stick, try execCommand
-      if (input.value !== message) {
-        input.focus();
-        input.select();
-        document.execCommand('insertText', false, message);
+        // Double-check: if value didn't stick, try execCommand
+        if (input.value !== message) {
+          input.focus();
+          input.select();
+          document.execCommand('insertText', false, message);
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          await sleep(300);
+        }
+      } else {
+        // Legacy X: contenteditable div — use execCommand
+        document.execCommand('selectAll', false, null);
+        document.execCommand('delete', false, null);
+        await sleep(100);
+
+        const lines = message.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i]) {
+            document.execCommand('insertText', false, lines[i]);
+          }
+          if (i < lines.length - 1) {
+            document.execCommand('insertLineBreak', false, null);
+          }
+          await sleep(50);
+        }
         input.dispatchEvent(new Event('input', { bubbles: true }));
       }
-    } else {
-      // Legacy X: contenteditable div — use execCommand
-      document.execCommand('selectAll', false, null);
-      document.execCommand('delete', false, null);
-      await sleep(100);
 
-      const lines = message.split('\n');
-      for (let i = 0; i < lines.length; i++) {
-        if (lines[i]) {
-          document.execCommand('insertText', false, lines[i]);
-        }
-        if (i < lines.length - 1) {
-          document.execCommand('insertLineBreak', false, null);
-        }
-        await sleep(50);
+      await sleep(600);
+
+      // Verify text was inserted
+      const currentText = isTextarea ? (input.value || '') : (input.textContent || input.innerText || '');
+      if (currentText.trim().length > 0) {
+        console.log(`[DM Extension X] Text inserted successfully on attempt ${typeAttempt}`);
+        break; // Success!
       }
-      input.dispatchEvent(new Event('input', { bubbles: true }));
+
+      console.log(`[DM Extension X] Type attempt ${typeAttempt}/${MAX_TYPE_ATTEMPTS} failed`);
+      if (typeAttempt === MAX_TYPE_ATTEMPTS) {
+        // LAST RESORT: Force text and proceed anyway
+        console.log('[DM Extension X] Forcing text via direct assignment');
+        if (isTextarea) {
+          input.value = message;
+        } else {
+          input.innerHTML = `<span>${message.replace(/\n/g, '<br>')}</span>`;
+        }
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        await sleep(500);
+        break; // Proceed to send regardless
+      }
+
+      // Wait before retry
+      await sleep(1500 + typeAttempt * 500);
+      // Re-focus
+      input.click();
+      await sleep(300);
+      input.focus();
+      await sleep(300);
     }
 
     await sleep(500);
